@@ -1,0 +1,15 @@
+# Deepwork session state (local only)
+.slim/deepwork/
+
+# Firmware secrets — never commit WiFi credentials
+firmware/SMARTLUX/secrets.h
+
+# Build output
+firmware/SMARTLUX/.pio/
+firmware/SMARTLUX/build/
+compile_commands.json
+*.stl
+
+# Tool caches and stray local files
+.ruff_cache/
+*netcfg_apply_pre.ps1

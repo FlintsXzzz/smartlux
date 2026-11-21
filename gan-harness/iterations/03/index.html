@@ -1,0 +1,158 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMARTLUX</title>
+<style>
+:root{--bg:#0b0d10;--panel:#12161b;--line:#1f252d;--fg:#e9eef5;--dim:#8b95a3;--on:#f4c95d;--acc:#7aa2ff;--ok:#4ade80;--r:16px}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.45 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}
+main{max-width:940px;margin:0 auto;padding:18px 20px 44px}
+.n{font-variant-numeric:tabular-nums}
+.stale .hero,.stale .grid{opacity:.4;transition:opacity .3s}
+header{display:flex;justify-content:space-between;align-items:center;padding:6px 0 28px;font-size:13px}
+.brand{letter-spacing:.14em;font-weight:600}
+.conn{display:flex;align-items:center;gap:8px;color:var(--dim)}
+.conn .d{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.conn.down{color:#f87171}.conn.down .d{background:#f87171}
+.hero{display:grid;gap:28px}
+@media(min-width:760px){.hero{grid-template-columns:1fr 1fr;gap:36px;align-items:start}}
+.state{color:#5b6572;font-size:clamp(40px,11vw,58px);font-weight:600;letter-spacing:-.03em;line-height:1;transition:color .3s}
+.state.on{color:var(--on)}
+.why{color:var(--dim);font-size:14px;margin-top:10px}
+.meter{margin-top:26px}
+.lux{display:flex;align-items:baseline;gap:8px}
+.lux b{font-size:26px;font-weight:600;letter-spacing:-.02em}
+.lux span{font-size:12px;color:var(--dim)}
+.bar{position:relative;height:6px;border-radius:99px;background:var(--line);margin-top:10px;overflow:hidden}
+.bar i{position:absolute;left:0;top:0;bottom:0;background:var(--acc);border-radius:99px;transition:width .4s}
+.bar .thr{position:absolute;top:0;bottom:0;width:2px;background:var(--bg)}
+.bar.sm{height:5px;margin-top:14px}
+.bar.sm i{background:var(--ok)}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+.k{font-size:12px;color:var(--dim)}
+.big{font-size:clamp(40px,10vw,52px);font-weight:600;letter-spacing:-.03em;line-height:1;margin:10px 0 8px}
+.big small{font-size:.4em;color:var(--dim);font-weight:500}
+.base{font-size:12px;color:var(--dim)}
+.duty{font-size:12px;color:var(--dim);margin-top:14px}
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-top:28px}
+.cell{background:var(--panel);padding:14px 14px 16px}
+.cell .v{font-size:18px;font-weight:600;margin-top:5px}
+.cell .v small{font-size:11px;color:var(--dim);font-weight:400;margin-left:2px}
+.mode{display:grid;grid-template-columns:1fr;gap:12px;margin-top:28px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:var(--panel);border:1px solid var(--line);border-radius:14px;padding:5px}
+.seg button{font:inherit;font-size:13px;border:0;border-radius:10px;background:none;color:var(--dim);padding:12px 0;min-height:44px;cursor:pointer}
+.seg button.act{background:#1c232c;color:var(--fg)}
+.seg button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.reset{font:inherit;font-size:12px;color:var(--dim);background:none;border:0;padding:10px;cursor:pointer;justify-self:center}
+.reset:hover{color:var(--fg)}
+@media(min-width:760px){.grid{grid-template-columns:repeat(6,1fr)}.seg{max-width:420px}.mode{grid-template-columns:1fr auto;align-items:center}.reset{justify-self:end}}
+</style>
+</head>
+<body>
+<main>
+<header><div class="brand n">SMARTLUX</div><div class="conn" id="conn"><span class="d"></span><span id="ip" class="n">192.168.1.42</span></div></header>
+<section class="hero">
+<div>
+<div class="state on" id="state"><span id="word">Nyala</span></div>
+<div class="why" id="why">Gelap dan ada gerakan</div>
+<div class="meter">
+<div class="lux"><b class="n" id="lux">182</b><span>lux &middot; <span class="n" id="pct">44%</span></span></div>
+<div class="bar"><i id="lit" style="width:44%"></i><span class="thr" style="left:40%"></span></div>
+</div>
+</div>
+<div class="panel">
+<div class="k">Hemat terhadap lampu selalu nyala</div>
+<div class="big n" id="sav">38,4<small>%</small></div>
+<div class="base n" id="wh">0,43 Wh dari 0,70 Wh</div>
+<div class="bar sm"><i id="mbar" style="width:38.4%"></i></div>
+<div class="duty n" id="duty">Nyala 42 s dari 60 s</div>
+</div>
+</section>
+<section class="grid">
+<div class="cell"><div class="k">Tegangan</div><div class="v n" id="volt">4,98<small>V</small></div></div>
+<div class="cell"><div class="k">Arus</div><div class="v n" id="cur">312<small>mA</small></div></div>
+<div class="cell"><div class="k">Daya</div><div class="v n" id="pwr">1,55<small>W</small></div></div>
+<div class="cell"><div class="k">Energi</div><div class="v n" id="tot">0,43<small>Wh</small></div></div>
+<div class="cell"><div class="k">Gerakan</div><div class="v" id="pir">Ada</div></div>
+<div class="cell"><div class="k">Aktif</div><div class="v n" id="up">12m</div></div>
+</section>
+<section class="mode">
+<div class="seg" role="group" aria-label="Mode lampu">
+<button id="b-auto" class="act">AUTO</button>
+<button id="b-on">NYALA</button>
+<button id="b-off">MATI</button>
+</div>
+<button class="reset" id="reset">Reset energi</button>
+</section>
+</main>
+<script>
+const $=i=>document.getElementById(i),DARK=40;
+const demo=location.protocol==='file:';
+let mode='auto',E=.43,L=.43,S=38.4,t0=Date.now();
+const hist=Array(60).fill(0);
+const f=(v,d)=>v.toLocaleString('id-ID',{minimumFractionDigits:d,maximumFractionDigits:d});
+const up=s=>{const m=Math.floor(s/60);return m<60?m+'m':Math.floor(m/60)+'j '+(m%60)+'m'};
+function why(d){
+  if(d.mode!=='auto')return 'Manual';
+  if(d.lamp)return d.pir?'Gelap dan ada gerakan':'Gelap, tunda mati';
+  return d.light_pct<DARK?'Gelap, menunggu gerakan':'Terang';
+}
+function paint(d){
+  $('word').textContent=d.lamp?'Nyala':'Mati';
+  $('state').classList.toggle('on',!!d.lamp);
+  $('why').textContent=why(d);
+  $('lux').textContent=Math.round(d.lux_est);
+  $('pct').textContent=d.light_pct+'%';
+  $('lit').style.width=Math.max(0,Math.min(100,d.light_pct))+'%';
+  $('sav').innerHTML=f(d.savings_pct,1)+'<small>%</small>';
+  $('mbar').style.width=Math.max(0,Math.min(100,d.savings_pct))+'%';
+  $('wh').textContent=d.savings_pct<99.9
+    ?f(d.lamp_energy_wh,2)+' Wh dari '+f(d.lamp_energy_wh/(1-d.savings_pct/100),2)+' Wh'
+    :f(d.lamp_energy_wh,2)+' Wh';
+  $('volt').innerHTML=f(d.voltage_v,2)+'<small>V</small>';
+  $('cur').innerHTML=Math.round(d.current_ma)+'<small>mA</small>';
+  $('pwr').innerHTML=f(d.power_mw/1000,2)+'<small>W</small>';
+  $('tot').innerHTML=f(d.energy_wh,2)+'<small>Wh</small>';
+  $('pir').textContent=d.pir?'Ada':'Tidak';
+  $('up').textContent=up(d.uptime_s);
+  $('ip').textContent=d.ip;
+  $('conn').classList.remove('down');document.body.classList.remove('stale');
+  mode=d.mode;
+  for(const m of ['auto','on','off'])$('b-'+m).classList.toggle('act',mode===m);
+  hist.push(d.lamp?1:0);hist.shift();
+  $('duty').textContent='Nyala '+hist.reduce((a,b)=>a+b,0)+' s dari 60 s';
+}
+function mock(){
+  E+=.0004;
+  return {light_pct:44,light_adc:1820,lux_est:182,pir:true,lamp:mode!=='off'&&Math.floor(Date.now()/5000)%4!=3,mode,
+    voltage_v:4.98,current_ma:312,power_mw:1554,energy_wh:E,lamp_energy_wh:L,
+    savings_pct:S,uptime_s:(Date.now()-t0)/1000,ip:'192.168.1.42'};
+}
+async function refresh(){
+  if(demo){paint(mock());return;}
+  try{
+    const r=await fetch('/api/status',{cache:'no-store'});
+    if(!r.ok)throw 0;
+    paint(await r.json());
+  }catch(e){
+    $('conn').classList.add('down');
+    $('ip').textContent='Terputus';document.body.classList.add('stale');
+  }
+}
+async function setMode(m){
+  if(demo){mode=m;paint(mock());return;}
+  try{await fetch('/api/override?mode='+m);}catch(e){}
+  refresh();
+}
+for(const m of['auto','on','off'])$('b-'+m).onclick=()=>setMode(m);
+$('reset').onclick=()=>{
+  if(!confirm('Reset energi terhitung?'))return;
+  if(demo){E=0;L=0;S=0;paint(mock());return;}
+  fetch('/api/reset').then(refresh);
+};
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>

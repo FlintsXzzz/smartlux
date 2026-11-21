@@ -1,0 +1,57 @@
+komponen,parameter,nilai_mm,catatan
+shell,inner_w,110.0,rongga dalam X — sesuaikan dengan tata letak modul
+shell,inner_d,75.0,rongga dalam Y
+shell,inner_h,40.0,rongga dalam Z di atas dasar
+shell,wall,2.4,dinding = 3 x nozzle 0.4
+shell,floor_t,2.4,tebal dasar
+shell,corner_r,4.0,radius sudut luar
+shell,lid_t,2.4,tebal pelat tutup
+shell,tol,0.3,clearance bukaan & rib (0.25-0.4 sesuai printer)
+shell,embed,0.3,overlap boss/tiang agar menyatu dengan dasar/tutup
+screw,boss_d,7.0,diameter luar boss M3
+screw,boss_inset,8.0,jarak pusat boss dari permukaan dinding dalam
+screw,boss_hole_d,2.8,pilot M3 self-tapping (4.6 untuk heat-set insert)
+screw,boss_hole_h,9.0,kedalaman ulir yang bisa dipakai
+screw,screw_hole_d,3.4,lubang lewat di tutup
+screw,cs_d,6.2,diameter countersink (kepala M3 DIN 963 = 5.6)
+screw,cs_h,1.6,kedalaman countersink
+screw,rib_h,10.0,tinggi gusset sudut
+esp32,esp_w,55.0,panjang papan DevKit 30 pin
+esp32,esp_d,28.0,lebar papan
+esp32,esp_hole_dx,48.5,jarak lubang X — UKUR SENDIRI
+esp32,esp_hole_dy,22.9,jarak lubang Y — UKUR SENDIRI
+esp32,esp_cx;esp_cy,43.5;26.0,pusat papan pada lantai
+esp32,esp_stand_h,5.0,tinggi tiang (dasar papan)
+esp32,esp_stand_d,5.0,diameter tiang
+esp32,esp_pilot_d,2.8,pilot M3
+oled,oled_win_w,26.0,jendela tampak X
+oled,oled_win_h,14.0,jendela tampak Y
+oled,oled_hole_dx;oled_hole_dy,23.5;23.5,jarak lubang M2 — UKUR SENDIRI
+oled,oled_cx;oled_cy,43.5;26.0,pusat OLED di bawah tutup
+oled,oled_stand_h,3.0,tinggi tiang tutup
+oled,oled_pilot_d,1.6,pilot M2
+ina219,ina_hole_dx,20.0,jarak 2 lubang M2 — UKUR SENDIRI
+ina219,ina_cx;ina_cy,86.0;58.0,pusat INA219 di lantai
+ina219,ina_stand_h,5.0,tinggi tiang lantai
+ina219,ina_pilot_d,1.6,pilot M2
+pir,pir_dome_d,24.0,bukaan fresnel (model memakai +tol = 24.3)
+pir,pir_hole_dx;pir_hole_dy,26.0;18.0,jarak lubang M2.5 — UKUR SENDIRI
+pir,pir_cx;pir_cy,87.0;27.0,pusat PIR di bawah tutup
+pir,pir_stand_h,3.0,tinggi tiang tutup
+pir,pir_pilot_d,2.0,pilot M2.5
+lid,btn_d,12.0,lubang tombol panel (model memakai +tol)
+lid,btn_cx;btn_cy,60.0;62.0,posisi tombol
+lid,ldr_d,5.0,jendela LDR
+lid,ldr_pipe_d;ldr_pipe_h,8.0;1.6,cekungan light pipe dari sisi dalam
+lid,ldr_cx;ldr_cy,32.0;62.0,posisi LDR
+wall,usb_w;usb_h,12.0;8.0,bukaan USB dinding kiri
+wall,usb_cz,10.9,pusat vertikal bukaan USB
+wall,jack_w;jack_h,9.0;11.0,bukaan jack DC dinding kanan
+wall,jack_cz,12.0,pusat vertikal jack DC
+wall,vent_len;vent_h,40.0;3.0,slot ventilasi (3 buah)
+wall,vent_z,12/19/26,pusat vertikal slot ventilasi
+floor,tie_w;tie_d;tie_h,12.0;3.0;5.0,tab cable tie di lantai
+floor,tie_slot_w;tie_slot_h,6.0;1.6,slot cable tie
+label,label_size,7.0,tinggi huruf emboss
+label,label_depth,0.6,tonjolan huruf
+label,label_x;label_z,57.4;7.0,posisi label di dinding depan

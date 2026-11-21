@@ -1,0 +1,9 @@
+# Kredensial WiFi lokal - JANGAN di-commit
+secrets.h
+
+# Artefak build
+.pio/
+build/
+*.bin
+*.elf
+*.map

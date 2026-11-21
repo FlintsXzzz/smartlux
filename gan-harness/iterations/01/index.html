@@ -1,0 +1,215 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMARTLUX</title>
+<style>
+:root{
+  --bg:#0b0d10; --panel:#12161b; --line:#1e242c; --fg:#e9eef5; --dim:#7d8896;
+  --on:#f4c95d; --ok:#4ade80; --acc:#7aa2ff;
+  --r:18px;
+}
+*{box-sizing:border-box}
+html,body{margin:0;background:var(--bg);color:var(--fg)}
+body{font:15px/1.4 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif;
+  -webkit-font-smoothing:antialiased;min-height:100dvh}
+main{max-width:960px;margin:0 auto;padding:20px 20px 40px}
+.num{font-variant-numeric:tabular-nums;font-feature-settings:"tnum"}
+
+header{display:flex;align-items:center;justify-content:space-between;padding:8px 0 26px}
+.brand{font-size:13px;letter-spacing:.14em;font-weight:600}
+.conn{display:flex;align-items:center;gap:8px;font-size:12px;color:var(--dim)}
+.conn .dot{width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.conn.down .dot{background:#f87171}
+.conn.down{color:#f87171}
+
+.hero{display:grid;grid-template-columns:1fr;gap:26px}
+@media(min-width:760px){.hero{grid-template-columns:1.15fr .85fr;gap:34px;align-items:start}}
+
+.light{position:relative;display:grid;place-items:center;padding:14px 0 6px}
+.ring{--p:44;width:min(72vw,270px);aspect-ratio:1;border-radius:50%;
+  background:
+    radial-gradient(closest-side,var(--panel) 0 67%,transparent 68%),
+    conic-gradient(var(--on) calc(var(--p)*1%),var(--line) 0);
+  display:grid;place-items:center;transition:background .6s ease}
+.light.on .ring{filter:drop-shadow(0 0 26px rgba(244,201,93,.18))}
+.read{text-align:center;margin-top:-4px}
+.read .v{font-size:clamp(52px,16vw,76px);line-height:.92;font-weight:600;letter-spacing:-.03em}
+.read .u{font-size:12px;color:var(--dim);letter-spacing:.18em;margin-top:8px}
+.read .sub{font-size:12px;color:var(--dim);margin-top:10px}
+
+.lamp{display:flex;align-items:center;gap:10px;justify-content:center;margin-top:22px}
+.lamp .bulb{width:9px;height:9px;border-radius:50%;background:var(--dim);transition:.3s}
+.lamp.on .bulb{background:var(--on);box-shadow:0 0 12px var(--on)}
+.lamp .txt{font-size:13px;color:var(--dim)}
+.lamp.on .txt{color:var(--fg)}
+
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:var(--r);padding:20px}
+.energy .k{font-size:12px;color:var(--dim)}
+.energy .big{font-size:clamp(40px,11vw,56px);font-weight:600;letter-spacing:-.03em;line-height:1;margin:10px 0 6px}
+.energy .big small{font-size:.42em;letter-spacing:0;color:var(--dim);font-weight:500}
+.energy .base{font-size:12px;color:var(--dim)}
+.bar{height:5px;border-radius:99px;background:var(--line);margin-top:16px;overflow:hidden}
+.bar i{display:block;height:100%;background:var(--acc);border-radius:99px;transition:width .5s ease}
+
+.trace{margin-top:22px}
+.trace .k{font-size:12px;color:var(--dim);margin-bottom:10px}
+.ticks{display:flex;gap:2px;height:34px;align-items:flex-end}
+.ticks i{flex:1;background:var(--line);border-radius:1px;height:10px;transition:height .3s,background .3s}
+.ticks i.on{background:var(--on)}
+
+.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:1px;background:var(--line);
+  border:1px solid var(--line);border-radius:var(--r);overflow:hidden;margin-top:26px}
+.cell{background:var(--panel);padding:16px 14px}
+.cell .k{font-size:11px;color:var(--dim)}
+.cell .v{font-size:19px;font-weight:600;margin-top:6px;letter-spacing:-.01em}
+.cell .v small{font-size:11px;color:var(--dim);font-weight:400;margin-left:2px}
+
+.mode{margin-top:26px}
+.seg{display:grid;grid-template-columns:repeat(3,1fr);gap:6px;background:var(--panel);
+  border:1px solid var(--line);border-radius:14px;padding:5px}
+.seg button{appearance:none;border:0;background:transparent;color:var(--dim);font:inherit;
+  font-size:13px;padding:12px 0;border-radius:10px;cursor:pointer;min-height:44px}
+.seg button.act{background:#1c232c;color:var(--fg)}
+.seg button:focus-visible{outline:2px solid var(--acc);outline-offset:1px}
+.reset{display:block;margin:14px auto 0;background:none;border:0;color:var(--dim);
+  font:inherit;font-size:12px;padding:10px;cursor:pointer}
+.reset:hover{color:var(--fg)}
+
+@media(min-width:760px){
+  .grid{grid-template-columns:repeat(6,1fr)}
+  .mode{display:flex;align-items:center;gap:16px}
+  .seg{flex:1}
+  .reset{margin:0}
+}
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <div class="brand num">SMARTLUX</div>
+    <div class="conn" id="conn"><span class="dot"></span><span id="ip" class="num">192.168.1.42</span></div>
+  </header>
+
+  <section class="hero">
+    <div>
+      <div class="light on" id="light">
+        <div class="ring num" id="ring" style="--p:44">
+          <div class="read">
+            <div class="v" id="lux">182</div>
+            <div class="u">LUX</div>
+            <div class="sub num" id="adc">ADC 1820 · 44%</div>
+          </div>
+        </div>
+      </div>
+      <div class="lamp on" id="lamp"><span class="bulb"></span><span class="txt" id="lamptxt">Lampu nyala</span></div>
+    </div>
+
+    <div class="panel energy">
+      <div class="k">Hemat terhadap lampu selalu nyala</div>
+      <div class="big num" id="sav">38,4<small>%</small></div>
+      <div class="base num" id="wh">0,43 Wh dari 0,70 Wh</div>
+      <div class="bar"><i id="savbar" style="width:38.4%"></i></div>
+
+      <div class="trace">
+        <div class="k">60 detik terakhir</div>
+        <div class="ticks" id="ticks"></div>
+      </div>
+    </div>
+  </section>
+
+  <section class="grid">
+    <div class="cell"><div class="k">Tegangan</div><div class="v num" id="volt">4,98<small>V</small></div></div>
+    <div class="cell"><div class="k">Arus</div><div class="v num" id="cur">312<small>mA</small></div></div>
+    <div class="cell"><div class="k">Daya</div><div class="v num" id="pwr">1,55<small>W</small></div></div>
+    <div class="cell"><div class="k">Energi</div><div class="v num" id="tot">0,43<small>Wh</small></div></div>
+    <div class="cell"><div class="k">Gerakan</div><div class="v" id="pir">Ada</div></div>
+    <div class="cell"><div class="k">Aktif</div><div class="v num" id="up">12m</div></div>
+  </section>
+
+  <section class="mode">
+    <div class="seg" role="group" aria-label="Mode lampu">
+      <button id="b-auto" class="act">AUTO</button>
+      <button id="b-on">NYALA</button>
+      <button id="b-off">MATI</button>
+    </div>
+    <button class="reset" id="reset">Reset energi</button>
+  </section>
+</main>
+<script>
+const $=id=>document.getElementById(id);
+const demo=location.protocol==='file:';
+let mode='auto', energy=0.43, lampEnergy=0.43, saved=38.4, t0=Date.now();
+const ticks=$('ticks');
+for(let i=0;i<60;i++){const e=document.createElement('i');ticks.appendChild(e);}
+
+function fmt(v,d){return v.toLocaleString('id-ID',{minimumFractionDigits:d,maximumFractionDigits:d});}
+
+function paint(d){
+  $('lux').textContent=Math.round(d.light_pct*4.1);
+  $('adc').textContent=`ADC ${d.light_adc} · ${d.light_pct}%`;
+  const dark=d.light_pct<40;
+  $('ring').style.setProperty('--p',d.light_pct);
+  $('light').classList.toggle('on',!!d.lamp);
+  $('lamp').classList.toggle('on',!!d.lamp);
+  $('lamptxt').textContent=d.lamp?'Lampu nyala':'Lampu mati';
+  $('sav').innerHTML=`${fmt(d.savings_pct,1)}<small>%</small>`;
+  $('savbar').style.width=Math.max(0,Math.min(100,d.savings_pct))+'%';
+  $('wh').textContent=`${fmt(d.lamp_energy_wh,2)} Wh dari ${fmt(d.lamp_energy_wh/Math.max(d.savings_pct/100,.01),2)} Wh`;
+  $('volt').innerHTML=`${fmt(d.voltage_v,2)}<small>V</small>`;
+  $('cur').innerHTML=`${Math.round(d.current_ma)}<small>mA</small>`;
+  $('pwr').innerHTML=`${fmt(d.power_mw/1000,2)}<small>W</small>`;
+  $('tot').innerHTML=`${fmt(d.energy_wh,2)}<small>Wh</small>`;
+  $('pir').textContent=d.pir?'Ada':'Tidak';
+  $('up').textContent=Math.floor(d.uptime_s/60)+'m';
+  $('ip').textContent=d.ip;
+  mode=d.mode;
+  for(const m of ['auto','on','off']) $('b-'+m).classList.toggle('act',mode===m);
+  $('conn').classList.remove('down');
+  const bars=ticks.children, on=!!d.lamp;
+  for(let i=0;i<bars.length-1;i++) bars[i].className=bars[i+1].className;
+  bars[bars.length-1].className=on?'on':'';
+  for(const b of bars) b.style.height=b.className?'34px':'10px';
+}
+
+function mock(){
+  energy+=0.0004;
+  return {light_pct:Math.round(38+18*Math.sin(Date.now()/9000)),
+    light_adc:1820, lux_est:182, pir:true, lamp:mode!=='off',
+    mode, voltage_v:4.98, current_ma:mode==='off'?92:312, power_mw:mode==='off'?458:1554,
+    energy_wh:energy, lamp_energy_wh:lampEnergy, savings_pct:saved,
+    uptime_s:(Date.now()-t0)/1000, ip:'192.168.1.42'};
+}
+
+async function refresh(){
+  if(demo){paint(mock());return;}
+  try{
+    const r=await fetch('/api/status',{cache:'no-store'});
+    if(!r.ok) throw 0;
+    paint(await r.json());
+  }catch(e){
+    $('conn').classList.add('down');
+    $('ip').textContent='Terputus';
+  }
+}
+
+async function setMode(m){
+  if(demo){mode=m;paint(mock());return;}
+  try{await fetch('/api/override?mode='+m);}catch(e){}
+  refresh();
+}
+
+$('b-auto').onclick=()=>setMode('auto');
+$('b-on').onclick=()=>setMode('on');
+$('b-off').onclick=()=>setMode('off');
+$('reset').onclick=()=>{
+  if(!confirm('Reset energi terhitung?'))return;
+  if(demo){energy=0;lampEnergy=0;saved=0;paint(mock());return;}
+  fetch('/api/reset').then(refresh);
+};
+
+refresh();setInterval(refresh,1000);
+</script>
+</body>
+</html>
