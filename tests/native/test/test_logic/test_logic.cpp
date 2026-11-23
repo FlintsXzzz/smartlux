@@ -1,0 +1,112 @@
+// Host tests for the pure SMARTLUX rules in firmware/SMARTLUX/logic.h.
+// No hardware: these run with `pio test -d tests/native -e native`.
+#include <unity.h>
+#include "logic.h"
+
+// --- lamp on/off decision (applyControl) -----------------------------------
+void test_warmup_forces_off(void) {
+  // PIR warm-up overrides every mode, including manual ON.
+  TEST_ASSERT_FALSE(lampShouldBeOn(0, false, true, true));
+  TEST_ASSERT_FALSE(lampShouldBeOn(1, false, true, true));
+  TEST_ASSERT_FALSE(lampShouldBeOn(2, false, true, true));
+}
+
+void test_manual_modes(void) {
+  TEST_ASSERT_TRUE(lampShouldBeOn(1, true, false, false));  // MANUAL_ON
+  TEST_ASSERT_FALSE(lampShouldBeOn(2, true, true, true));   // MANUAL_OFF
+}
+
+void test_auto_requires_dark_and_motion(void) {
+  TEST_ASSERT_TRUE(lampShouldBeOn(0, true, true, true));
+  TEST_ASSERT_FALSE(lampShouldBeOn(0, true, false, true));
+  TEST_ASSERT_FALSE(lampShouldBeOn(0, true, true, false));
+  TEST_ASSERT_FALSE(lampShouldBeOn(0, true, false, false));
+}
+
+// --- button cycle: AUTO -> ON -> OFF -> AUTO ------------------------------
+void test_cycle_mode(void) {
+  TEST_ASSERT_EQUAL_INT(1, cycleModeValue(0));
+  TEST_ASSERT_EQUAL_INT(2, cycleModeValue(1));
+  TEST_ASSERT_EQUAL_INT(0, cycleModeValue(2));
+}
+
+// --- /api/override mode parsing (validated before the rate gate) -----------
+void test_parse_mode(void) {
+  TEST_ASSERT_EQUAL_INT(0, parseMode("auto"));
+  TEST_ASSERT_EQUAL_INT(1, parseMode("on"));
+  TEST_ASSERT_EQUAL_INT(2, parseMode("off"));
+  TEST_ASSERT_EQUAL_INT(-1, parseMode("ON"));
+  TEST_ASSERT_EQUAL_INT(-1, parseMode(""));
+  TEST_ASSERT_EQUAL_INT(-1, parseMode(nullptr));
+}
+
+void test_mode_key(void) {
+  TEST_ASSERT_EQUAL_STRING("auto", modeKeyFor(0));
+  TEST_ASSERT_EQUAL_STRING("on", modeKeyFor(1));
+  TEST_ASSERT_EQUAL_STRING("off", modeKeyFor(2));
+  TEST_ASSERT_EQUAL_STRING("auto", modeKeyFor(99));
+}
+
+// --- LDR hysteresis and mapping -------------------------------------------
+void test_light_hysteresis(void) {
+  TEST_ASSERT_EQUAL_INT(0, lightDecision(1499, 1500, 1800));
+  TEST_ASSERT_EQUAL_INT(-1, lightDecision(1500, 1500, 1800));  // keep
+  TEST_ASSERT_EQUAL_INT(-1, lightDecision(1800, 1500, 1800));  // keep
+  TEST_ASSERT_EQUAL_INT(1, lightDecision(1801, 1500, 1800));
+}
+
+void test_light_percent(void) {
+  TEST_ASSERT_EQUAL_INT(0, lightPercent(-5));
+  TEST_ASSERT_EQUAL_INT(0, lightPercent(0));
+  TEST_ASSERT_EQUAL_INT(50, lightPercent(2048));
+  TEST_ASSERT_EQUAL_INT(100, lightPercent(4095));
+  TEST_ASSERT_EQUAL_INT(100, lightPercent(5000));
+}
+
+// --- delay-off window ------------------------------------------------------
+void test_motion_active(void) {
+  TEST_ASSERT_TRUE(motionActive(1000, 900, 200));    // 100 < 200
+  TEST_ASSERT_FALSE(motionActive(1100, 900, 200));   // 200 == 200 -> closed
+  TEST_ASSERT_FALSE(motionActive(1400, 900, 200));   // 500 > 200
+}
+
+// --- energy integration ----------------------------------------------------
+void test_energy_increment(void) {
+  // 5 V, 1000 mA for one hour = 5 Wh.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 5.0, energyIncrementWh(5.0f, 1000.0f, 3600000UL));
+  // 1 s at the same load = 5/3600 Wh.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-9, 5.0 / 3600.0,
+                            energyIncrementWh(5.0f, 1000.0f, 1000UL));
+  // Zero current adds nothing.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, energyIncrementWh(5.0f, 0.0f, 1000UL));
+}
+
+// --- savings vs an always-on lamp -----------------------------------------
+void test_savings(void) {
+  // 3 W baseline over 1 h = 3 Wh; lamp used 1.2 Wh -> 60 %.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-6, 60.0, computeSavingsPct(3.0, 1.2, 3600000UL));
+  // No elapsed time -> 0 (avoids divide-by-zero).
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, computeSavingsPct(3.0, 1.0, 0UL));
+  // Zero power -> 0.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, computeSavingsPct(0.0, 0.0, 3600000UL));
+  // Usage above baseline clamps to 0.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 0.0, computeSavingsPct(1.0, 2.0, 3600000UL));
+  // Zero lamp energy clamps to 100.
+  TEST_ASSERT_DOUBLE_WITHIN(1e-12, 100.0, computeSavingsPct(1.0, 0.0, 3600000UL));
+}
+
+int main(int, char **) {
+  UNITY_BEGIN();
+  RUN_TEST(test_warmup_forces_off);
+  RUN_TEST(test_manual_modes);
+  RUN_TEST(test_auto_requires_dark_and_motion);
+  RUN_TEST(test_cycle_mode);
+  RUN_TEST(test_parse_mode);
+  RUN_TEST(test_mode_key);
+  RUN_TEST(test_light_hysteresis);
+  RUN_TEST(test_light_percent);
+  RUN_TEST(test_motion_active);
+  RUN_TEST(test_energy_increment);
+  RUN_TEST(test_savings);
+  return UNITY_END();
+}

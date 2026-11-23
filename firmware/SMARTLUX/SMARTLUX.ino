@@ -45,6 +45,7 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_INA219.h>
+#include "logic.h"
 
 // --- Kredensial WiFi (tidak di-commit) --------------------------------------
 #if __has_include("secrets.h")
@@ -420,11 +421,7 @@ static_assert(sizeof(INDEX_HTML) <= 8192, "Dashboard INDEX_HTML melebihi 8 KB");
 // Util
 // ===========================================================================
 static const char *modeKey() {
-  switch (g_mode) {
-    case MODE_MANUAL_ON:  return "on";
-    case MODE_MANUAL_OFF: return "off";
-    default:              return "auto";
-  }
+  return modeKeyFor((int)g_mode);
 }
 
 static const char *modeLabel() {
@@ -445,13 +442,8 @@ static void ipToStr(const IPAddress &ip, char *out, size_t n) {
 // Catatan: INA219 mengukur seluruh rel 5 V, jadi E_lamp masih memuat beban
 // dasar (ESP32+PIR+PIR ~0,9-1,0 W). Dekomposisi rinci ada di proposal.
 static double savingsPct() {
-  const double hours = (millis() - g_energyStartMs) / 3600000.0;
-  const double baseline = g_lampPowerW * hours;
-  if (baseline < 1e-6) return 0.0;
-  double s = (baseline - g_lampEnergyWh) / baseline * 100.0;
-  if (s < 0.0) s = 0.0;
-  if (s > 100.0) s = 100.0;
-  return s;
+  return computeSavingsPct(g_lampPowerW, g_lampEnergyWh,
+                           (unsigned long)(millis() - g_energyStartMs));
 }
 
 // ===========================================================================
@@ -515,16 +507,7 @@ static void inaBegin() {
 // Kontrol lampu
 // ===========================================================================
 static void applyControl() {
-  bool lamp;
-  if (!g_pirReady) {
-    lamp = false;                    // warm-up PIR: paksa mati (aman)
-  } else if (g_mode == MODE_MANUAL_ON) {
-    lamp = true;
-  } else if (g_mode == MODE_MANUAL_OFF) {
-    lamp = false;
-  } else {
-    lamp = g_dark && g_motion;       // AUTO: gelap DAN gerak (dengan delay-off)
-  }
+  const bool lamp = lampShouldBeOn((int)g_mode, g_pirReady, g_dark, g_motion);
   setLampState(lamp ? LAMP_ON : (g_pirReady ? LAMP_OFF : LAMP_FORCED_OFF));
 }
 
@@ -540,11 +523,7 @@ static void setMode(Mode m) {
 }
 
 static void cycleMode() {
-  switch (g_mode) {
-    case MODE_AUTO:       setMode(MODE_MANUAL_ON);  break;
-    case MODE_MANUAL_ON:  setMode(MODE_MANUAL_OFF); break;
-    case MODE_MANUAL_OFF: setMode(MODE_AUTO);       break;
-  }
+  setMode((Mode)cycleModeValue((int)g_mode));
 }
 
 // ===========================================================================
@@ -592,16 +571,14 @@ static void sampleSensors() {
   g_adc = analogRead(PIN_LDR);
 
   // Histeresis: cegah kedip di sekitar ambang.
-  if (g_adc < ADC_DARK_ON)         setLightState(LIGHT_DARK);
-  else if (g_adc > ADC_BRIGHT_OFF) setLightState(LIGHT_BRIGHT);
+  const int light = lightDecision(g_adc, ADC_DARK_ON, ADC_BRIGHT_OFF);
+  if (light == 0)      setLightState(LIGHT_DARK);
+  else if (light == 1) setLightState(LIGHT_BRIGHT);
 
-  if (g_adc < 0) g_adc = 0;
-  if (g_adc > 4095) g_adc = 4095;
-  g_lightPct = (int)((long)g_adc * 100L / 4095L);
+  g_lightPct = lightPercent(g_adc);
 
   // Estimasi lux kasar (non-linear, LDR): terang penuh ~LUX_FULL_SCALE.
-  const float ratio = (float)g_adc / 4095.0f;
-  g_lux = LUX_FULL_SCALE * powf(ratio, 2.2f);
+  g_lux = luxEstimate(g_adc, LUX_FULL_SCALE);
 
   const bool pirRaw = (digitalRead(PIN_PIR) == HIGH);
   g_pir = pirRaw;
@@ -619,7 +596,7 @@ static void sampleSensors() {
     setPirState(PIR_QUIET);
   }
 
-  g_motion = (millis() - g_lastMotionMs) < DELAY_OFF_MS;
+  g_motion = motionActive(millis(), g_lastMotionMs, DELAY_OFF_MS);
   applyControl();
 }
 
@@ -643,7 +620,7 @@ static void learnLampPower() {
 
 static void samplePower() {
   const unsigned long now = millis();
-  const double dtH = (now - g_lastPowerMs) / 3600000.0;  // jam
+  const unsigned long dtMs = now - g_lastPowerMs;
   g_lastPowerMs = now;
 
   if (g_inaOk) {
@@ -658,9 +635,9 @@ static void samplePower() {
     g_mW = 0.0f;
   }
 
-  // E_Wh += V * I * dt / 3600  (V*I dalam W, dt dalam jam)
-  if (g_inaOk && dtH > 0.0) {
-    const double wh = ((double)g_busV * (double)g_mA / 1000.0) * dtH;
+  // E_Wh += V * I * dt  (dt dalam milidetik)
+  if (g_inaOk && dtMs > 0) {
+    const double wh = energyIncrementWh(g_busV, g_mA, dtMs);
     g_energyWh += wh;
     if (g_lamp) g_lampEnergyWh += wh;
   }
@@ -992,8 +969,8 @@ static void handleOverride() {
   }
   const String m = server.arg("mode");
   // Validasi penuh dulu: nilai salah tidak boleh menghabiskan slot gate.
-  const bool valid = (m == "auto") || (m == "on") || (m == "off");
-  if (!valid) {
+  const int mi = parseMode(m.c_str());
+  if (mi < 0) {
     server.send(400, "application/json", "{\"error\":\"mode tidak dikenal\"}");
     return;
   }
@@ -1002,9 +979,7 @@ static void handleOverride() {
     server.send(429, "application/json", "{\"error\":\"terlalu sering, tunggu sebentar\"}");
     return;
   }
-  if (m == "auto")      setMode(MODE_AUTO);
-  else if (m == "on")   setMode(MODE_MANUAL_ON);
-  else                  setMode(MODE_MANUAL_OFF);
+  setMode((Mode)mi);
   char json[48];
   snprintf(json, sizeof(json), "{\"ok\":1,\"mode\":\"%s\"}", modeKey());
   server.send(200, "application/json", json);

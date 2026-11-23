@@ -5,6 +5,7 @@
 firmware/SMARTLUX/secrets.h
 
 # Build output
+.pio/
 firmware/SMARTLUX/.pio/
 firmware/SMARTLUX/build/
 compile_commands.json
