@@ -6,6 +6,11 @@ dan proyek memakai [Semantic Versioning](https://semver.org/lang/id/).
 
 ## [Unreleased]
 
+### Added
+- Logika keputusan murni diekstrak ke `firmware/SMARTLUX/logic.h` dan diuji dengan
+  Unity di `tests/native/` (`pio test -d tests/native -e native`, 11/11 lulus);
+  CI menjalankan job `native-tests` terpisah.
+
 ## [0.1.0] - 2026-11-23
 
 Rilis pertama: firmware terkompilasi, dashboard, enclosure, dan dokumen proposal.
