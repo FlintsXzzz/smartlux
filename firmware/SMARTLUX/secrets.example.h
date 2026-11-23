@@ -32,3 +32,9 @@
 // Enroll sekali lewat /?t=<token>; setelah itu browser menyimpan cookie
 // HttpOnly SameSite=Strict. Token juga tercatat di riwayat browser.
 // #define SMARTLUX_TOKEN "ganti-token-panjang-dan-unik"
+
+// Sandi OTA (opt-in). OTA hanya aktif bila define ini ADA dan panjangnya
+// >= 8 karakter; kalau tidak, OTA dinonaktifkan (pesan di Serial). Token
+// dashboard turunan MAC tidak dipakai karena mudah dihitung orang di LAN.
+// Pakai sandi unik yang kuat dan jangan di-commit.
+// #define SMARTLUX_OTA_PASS "ganti-sandi-ota-panjang"

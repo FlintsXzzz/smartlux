@@ -17,6 +17,9 @@ Rincian metodologi ada di proposal (BAB III); dokumen ini hanya urutan kerja.
 3. Tetapkan ambang di antara kedua nilai dengan histeresis 10–20 %
    (mis. gelap 1800, terang 2100), lalu sesuaikan nilai ambang pada bagian
    konfigurasi firmware. Jangan pernah memberi 5 V ke GPIO34; batasnya 3,3 V.
+4. Firmware membaca ADC lima kali dan memakai nilai tengah (median) sebelum
+   memutuskan status cahaya. Catat nilai `light_adc` yang sudah stabil, bukan
+   satu pembacaan sesaat yang bisa melonjak.
 
 ## 3. INA219 (0x40, shunt 0,1 Ω)
 

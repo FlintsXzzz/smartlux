@@ -258,6 +258,8 @@ Modul INA219 juga menggunakan I²C (alamat 0x40) dan dipasang secara high-side p
 
 Dashboard web lokal dibuat dengan WebServer pada ESP32 dan diakses melalui browser di jaringan Wi-Fi yang sama. ESP32 dapat berperan sebagai station (STA) yang terhubung ke router sekolah, atau sebagai access point (AP) dengan nama SSID `SMARTLUX-XXXX` apabila koneksi STA gagal. Alamat `smartlux.local` disediakan melalui mDNS agar tidak perlu menghafal alamat IP. Halaman dashboard memuat kartu ringkasan (cahaya, status PIR, status lampu, mode, tegangan, arus, daya, energi, dan penghematan) serta tombol AUTO, ON, dan OFF. Data diperbarui setiap 1 detik melalui endpoint JSON `/api/status`; perintah mode dikirim ke `/api/override`. Karena halaman disimpan di memori program ESP32 (PROGMEM), dashboard tetap dapat diakses tanpa internet dan tanpa file eksternal.
 
+Sebagai pelengkap, firmware menyimpan 60 sampel terakhir daya dan nilai duty lampu di memori. Endpoint `/api/history` mengembalikan sampel tersebut dalam bentuk JSON, `/api/export` mengunduhnya sebagai CSV, dan halaman `/chart` menampilkan grafik daya (W) serta duty lampu (%) tanpa pustaka dari internet. Karena halaman utama sudah hampir penuh di PROGMEM, grafik disajikan pada halaman tersendiri dan diakses langsung melalui alamat `http://smartlux.local/chart`. Akumulasi energi (`energy_wh`, energi lampu, durasi, dan daya lampu hasil kalibrasi) juga dipersistenkan dalam memori non-volatile (NVS) ESP32 tiap 60 detik, sehingga tidak hilang saat perangkat mati; tombol reset pada dashboard mengosongkan nilai tersebut.
+
 ## **2.7 Spesifikasi Komponen Utama**
 
 | **Komponen**   | **Spesifikasi / karakteristik yang digunakan**                                                                                               | **Pemeriksaan sebelum perakitan**                                                                                                             |
@@ -296,6 +298,10 @@ Sistem memiliki tiga mode yang ditampilkan pada OLED dan dashboard:
 | MANUAL OFF | Lampu selalu mati tanpa memedulikan sensor | Tekan tombol singkat dari MANUAL_ON, atau tombol OFF pada dashboard |
 
 Tombol override dihubungkan ke GPIO32 dengan konfigurasi INPUT_PULLUP; menekan tombol menghubungkan pin ke GND (active LOW). Firmware melakukan debounce 50 ms. Tekanan singkat (50–800 ms) memutar mode AUTO → MANUAL ON → MANUAL OFF → AUTO, sedangkan tekanan panjang (lebih dari 1500 ms) langsung mengembalikan sistem ke AUTO. Mode manual tidak memiliki batas waktu, tetapi statusnya selalu ditampilkan agar pengguna tidak lupa; dashboard menyediakan tombol AUTO untuk kembali. Perubahan mode tidak mengubah ambang LDR maupun waktu tunda.
+
+Pada mode AUTO, lampu tidak hanya menyala atau mati. Firmware memakai PWM LEDC pada GPIO26 dengan frekuensi 1 kHz dan resolusi 8 bit: duty 255 (penuh) saat gerakan terdeteksi, diturunkan ke 128 (sekitar 50%) pada 15 detik terakhir masa tunda, lalu 0 saat tunda berakhir. Peredupan dua tingkat ini bertujuan mengurangi daya menjelang lampu mati sekaligus memberi tanda visual kepada pengguna. Rangkaian resistor gate 220–470 Ω dan pull-down 10 kΩ tetap kompatibel pada frekuensi ini. Karena tidak semua modul LED mendukung PWM (terutama LED dengan driver arus konstan), pengaruh peredupan harus diuji dan dicatat secara empiris pada laporan akhir; hasil perhitungan energi tetap memakai daya yang diukur INA219, bukan daya nominal.
+
+Kestabilan pembacaan ditingkatkan dengan filter median lima sampel berturut-turut pada ADC LDR, sehingga satu pembacaan menyimpang tidak langsung mengubah keputusan lampu. Firmware juga memantau task watchdog ESP32 dan melakukan inisialisasi ulang bus I²C bila OLED atau INA219 berhenti merespons tiga kali berturut-turut; OLED hanya diinisialisasi ulang bila memang sebelumnya aktif. Pembaruan firmware lewat jaringan (OTA) tersedia sebagai fitur opsional yang hanya aktif apabila kata sandi khusus minimal delapan karakter diisi pada `secrets.h`; tanpa itu fitur OTA dinonaktifkan demi keamanan.
 
 **BAB III  
 METODE PERANCANGAN DAN PEMBUATAN**
@@ -399,7 +405,7 @@ Tambahan hasil tinjauan teknis: (1) GPIO34 harus dikonfigurasi pada attenuasi AD
 
 7\. Periksa kembali rangkaian menggunakan pemeriksaan visual dan multimeter sebelum menyalakan sumber.
 
-8\. Program ESP32: konfigurasikan ADC1 dengan attenuasi 11 dB (`ADC_ATTEN_DB_11`), gunakan kalibrasi ADC jika tersedia, terapkan kalibrasi ambang dengan histeresis 10–20%, dan tunda pembacaan PIR selama 60 detik sejak pemberian daya. Kerangka firmware contoh disediakan pada berkas `firmware/SMARTLUX/SMARTLUX.ino` dalam lampiran digital. Lakukan uji setiap sensor secara terpisah, kemudian uji sistem secara keseluruhan.
+8\. Program ESP32: konfigurasikan ADC1 dengan attenuasi 11 dB (`ADC_ATTEN_DB_11`), gunakan kalibrasi ADC jika tersedia, terapkan filter median lima sampel pada pembacaan LDR, gunakan kalibrasi ambang dengan histeresis 10–20%, dan tunda pembacaan PIR selama 60 detik sejak pemberian daya. Kerangka firmware contoh disediakan pada berkas `firmware/SMARTLUX/SMARTLUX.ino` dalam lampiran digital. Lakukan uji setiap sensor secara terpisah, kemudian uji sistem secara keseluruhan.
 
 9\. Ukur tegangan pin OUT PIR dengan multimeter; hanya sambungkan ke GPIO27 jika tegangannya tidak melebihi 3,6 V. Jika lebih tinggi, turunkan dengan pembagi tegangan atau penjepit tegangan.
 
@@ -420,6 +426,10 @@ Tambahan hasil tinjauan teknis: (1) GPIO34 harus dikonfigurasi pada attenuasi AD
 17\. Cetak casing dan tutupnya menggunakan berkas `hardware/enclosure/smartlux_case.scad`, lalu pasang modul dengan sekrup M3/M2 sesuai dudukan. Pastikan lubang ventilasi tidak tertutup.
 
 18\. Lakukan uji akhir: nyalakan sistem, periksa pembacaan OLED, akses dashboard melalui `smartlux.local` atau alamat IP, dan uji ketiga mode override sebelum pengambilan data.
+
+19\. Aktifkan PWM LEDC 1 kHz/8 bit pada GPIO26 dan amati transisi duty 255 → 128 → 0 menjelang akhir masa tunda. Catat apakah LED berkedip atau justru stabil; bila modul LED tidak mendukung peredupan, nyatakan hal tersebut pada laporan dan pakai hasil pengukuran daya sebagai acuan.
+
+20\. Uji persistensi energi dengan mencatat nilai pada `/api/status`, memutus daya selama beberapa detik, lalu menyambungkannya kembali; nilai energi harus kembali muncul. Uji pula `/api/history`, `/api/export`, dan `/chart`. Bila OTA diperlukan, isi `SMARTLUX_OTA_PASS` minimal delapan karakter pada `secrets.h` terlebih dahulu; tanpa itu OTA sengaja dinonaktifkan.
 
 ## **3.7 Prosedur Pengujian**
 
@@ -500,6 +510,18 @@ Agar perbandingan adil, mode konvensional harus memakai lampu yang sama jenis, d
 3\. Ukur suhu permukaan casing setelah 30 menit operasi; pastikan tidak ada bagian yang terlalu panas.
 
 4\. Dokumentasikan tampak depan, belakang, samping, dan dalam.
+
+### **G. Uji peredupan, pemulihan I²C, persistensi, dan grafik**
+
+1\. Pada mode AUTO dengan ruangan gelap, picu gerakan lalu amati duty `lamp_pwm` pada `/api/status`: 255 saat gerakan, 128 pada 15 detik terakhir masa tunda, lalu 0. Ulangi lima kali dan catat kestabilan transisi.
+
+2\. Sengaja lepaskan sebentar kabel SDA/SCL I²C pada INA219 atau OLED, lalu sambungkan kembali. Pastikan pembacaan kembali normal dalam beberapa detik tanpa perlu memutus daya, dan catat pesan pemulihan pada Serial.
+
+3\. Catat energi pada `/api/status`, matikan perangkat selama 10 detik, lalu nyalakan kembali. Pastikan energi tersimpan, lalu uji `/api/reset` dan pastikan seluruh akumulator kembali nol.
+
+4\. Buka `/chart`, periksa grafik daya dan duty mengikuti percobaan nomor 1, lalu unduh CSV dari `/api/export` dan cocokkan jumlah baris dengan sampel yang ditampilkan.
+
+5\. Apabila OTA diaktifkan dengan kata sandi yang benar, lakukan satu percobaan unggah firmware dan catat keberhasilan. Tanpa kata sandi, pastikan OTA benar-benar tidak merespons.
 
 ## **3.8 Teknik Pengukuran dan Analisis Data**
 
@@ -742,6 +764,16 @@ Cara pengisian: ukur V dan I secara terpisah untuk setiap keadaan (konvensional;
 | 2       | Data JSON | Buka `/api/status` | JSON lengkap dan diperbarui |              |
 | 3       | Kontrol mode | Tekan tombol ON/OFF/AUTO | Mode berubah dan status ikut berubah |          |
 | 4       | AP fallback | Putuskan router | SSID `SMARTLUX-XXXX` muncul |                    |
+
+### **D. Grafik, persistensi energi, dan OTA**
+
+| **No.** | **Uji** | **Cara** | **Hasil diharapkan** | **Hasil aktual** |
+| ------- | ------- | -------- | -------------------- | ---------------- |
+| 1       | Duty lampu | Amati `lamp_pwm` saat gerakan dan menjelang akhir tunda | 255 → 128 → 0 |                  |
+| 2       | Riwayat | Buka `/api/history`, lalu `/chart` | Grafik mengikuti sampel daya dan duty |          |
+| 3       | Ekspor CSV | Unduh `/api/export` | Baris `t_s,mw,pwm` sesuai grafik |            |
+| 4       | Persistensi NVS | Putus dan sambung daya, lalu `/api/reset` | Energi kembali, lalu nol setelah reset |      |
+| 5       | OTA | Isi kata sandi ≥8 karakter di `secrets.h`, lalu unggah | OTA berhasil; tanpa kata sandi OTA mati |    |
 
 ## **Lampiran 4. Dokumentasi**
 

@@ -13,6 +13,10 @@
 // Dashboard auth token: SMARTLUX_TOKEN from secrets.h, or a 12-hex MAC fallback.
 #define SLX_TOKEN_MAX_LEN 64u
 
+// Shared mode code so pure helpers never hard-code a literal; SMARTLUX.ino
+// static_asserts that its enum matches this value.
+#define SLX_MODE_MANUAL_ON 1
+
 // Mode encoding matches `enum Mode` in SMARTLUX.ino:
 //   AUTO = 0, MANUAL_ON = 1, MANUAL_OFF = 2
 // Returns whether the lamp should be ON for the given sensors and mode.
@@ -98,6 +102,35 @@ static inline double computeSavingsPct(double lampPowerW, double lampEnergyWh,
   if (s < 0.0) s = 0.0;
   if (s > 100.0) s = 100.0;
   return s;
+}
+
+// --- ADC median filter (R1) --------------------------------------------------
+// Median of up to the first 5 samples; rejects single-sample spikes.
+// n <= 0 returns 0. Even n uses the upper middle element.
+static inline int adcMedian5(const int *s, int n) {
+  if (n <= 0 || s == nullptr) return 0;
+  if (n > 5) n = 5;
+  int c[5];
+  for (int i = 0; i < n; i++) c[i] = s[i];
+  for (int i = 1; i < n; i++) {
+    int v = c[i], j = i - 1;
+    while (j >= 0 && c[j] > v) { c[j + 1] = c[j]; j--; }
+    c[j + 1] = v;
+  }
+  return c[n / 2];
+}
+
+// --- Two-level lamp brightness (R4) -------------------------------------------
+// PWM duty 0..255. Off -> 0; MANUAL_ON -> 255 always. AUTO: full 255 until the
+// last `dimMs` of the off-delay window, then 128; expired -> 0.
+static inline int lampBrightness(bool lampOn, int mode, unsigned long nowMs,
+                                 unsigned long lastMotionMs,
+                                 unsigned long delayMs, unsigned long dimMs) {
+  if (!lampOn) return 0;
+  if (mode == SLX_MODE_MANUAL_ON) return 255;
+  const unsigned long elapsed = nowMs - lastMotionMs;
+  if (elapsed >= delayMs) return 0;
+  return (delayMs - elapsed) <= dimMs ? 128 : 255;
 }
 
 // --- Dashboard token auth ----------------------------------------------------

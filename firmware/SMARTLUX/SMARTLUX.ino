@@ -45,6 +45,9 @@
 #include <Adafruit_GFX.h>
 #include <Adafruit_SSD1306.h>
 #include <Adafruit_INA219.h>
+#include <Preferences.h>
+#include <ArduinoOTA.h>
+#include <esp_task_wdt.h>
 #include "logic.h"
 
 // --- Kredensial WiFi (tidak di-commit) --------------------------------------
@@ -79,6 +82,14 @@ static const unsigned long BTN_SHORT_MAX_MS = 800UL;
 static const unsigned long BTN_LONG_MS      = 1500UL;
 static const unsigned long STA_TIMEOUT_MS   = 20000UL; // fallback ke AP
 static const unsigned long RECONNECT_MS     = 10000UL;
+static const unsigned long DIM_WINDOW_MS    = 15000UL; // redup di akhir delay-off
+static const unsigned long ENERGY_SAVE_MS   = 60000UL; // simpan NVS tiap 60 s
+// 30 s: lebih lama dari blok write TCP/flash terburuk supaya koneksi lambat
+// tidak memicu reset. trigger_panic tetap true agar board benar-benar pulih.
+static const uint32_t WDT_TIMEOUT_MS        = 30000;   // task watchdog
+static const uint16_t I2C_TIMEOUT_MS        = 100;     // Wire.setTimeOut
+static const unsigned long I2C_RECOVER_COOLDOWN_MS = 30000UL;
+static const int HIST_LEN                   = 60;      // riwayat 60 x 1 s
 
 // --- Ambang cahaya (CONTOH - HARUS DIKALIBRASI) -----------------------------
 // LDR dibaca dari divider: makin terang -> ADC makin tinggi.
@@ -98,6 +109,8 @@ enum Mode { MODE_AUTO = 0, MODE_MANUAL_ON = 1, MODE_MANUAL_OFF = 2 };
 static_assert((int)MODE_AUTO == 0 && (int)MODE_MANUAL_ON == 1 &&
                   (int)MODE_MANUAL_OFF == 2,
               "logic.h assumes AUTO=0, ON=1, OFF=2");
+static_assert((int)MODE_MANUAL_ON == SLX_MODE_MANUAL_ON,
+              "lampBrightness() must agree with the firmware mode enum");
 enum NetState { NET_CONNECTING = 0, NET_STA = 1, NET_AP = 2 };
 
 // --- Status global ----------------------------------------------------------
@@ -125,6 +138,21 @@ static double g_lampSumW = 0.0;
 static uint32_t g_lampSamples = 0;
 static unsigned long g_lastPowerMs = 0;
 static unsigned long g_energyStartMs = 0;
+
+// --- PWM / filter / NVS / riwayat (R1, R3, R4, R5) ---------------------------
+static int g_pwm = 0;                       // duty LEDC 0..255 di GPIO26
+static int g_adcHist[5] = {0, 0, 0, 0, 0};  // jendela median LDR
+static int g_adcIdx = 0;
+static int g_adcCount = 0;
+static Preferences g_prefs;                 // NVS: energi tahan mati listrik
+static unsigned long g_lastSaveMs = 0;
+static int g_i2cFails = 0;                  // pemulihan bus I2C (EcoSentinel)
+static unsigned long g_lastI2cRecoverMs = 0; // cooldown antar percobaan pulihkan bus
+static bool g_otaEnabled = false;           // hanya aktif dengan sandi eksplisit
+struct HistSample { uint32_t t_s; uint16_t mw; uint8_t pwm; };
+static HistSample g_hist[HIST_LEN];
+static int g_histHead = 0;   // slot tulis berikutnya
+static int g_histCount = 0;  // jumlah sampel valid (<= HIST_LEN)
 
 // --- Tombol ----------------------------------------------------------------
 static bool g_btnStable = true;        // true = lepas (HIGH)
@@ -191,7 +219,10 @@ static void setNetState(NetState s) { g_net = s; }
 static void setLampState(LampState s) {
   g_lampState = s;
   g_lamp = (s == LAMP_ON);
-  digitalWrite(PIN_MOSFET, g_lamp ? HIGH : LOW);
+  // R4: PWM dua tingkat (255 penuh / 128 redup / 0 mati) via LEDC 1 kHz.
+  g_pwm = lampBrightness(g_lamp, (int)g_mode, millis(), g_lastMotionMs,
+                         DELAY_OFF_MS, DIM_WINDOW_MS);
+  ledcWrite(PIN_MOSFET, (uint32_t)g_pwm);
 }
 static void setBootPhase(BootPhase s) { g_bootPhase = s; }
 
@@ -424,6 +455,58 @@ refresh();setInterval(refresh,1000);
 // Anggaran PROGMEM dari gan-harness/spec.md: gagal saat kompilasi bila terlampaui.
 static_assert(sizeof(INDEX_HTML) <= 8192, "Dashboard INDEX_HTML melebihi 8 KB");
 
+// Halaman grafik riwayat (R5). Baris `function` sengaja di-indent 1 spasi agar
+// ino2cpp PlatformIO tidak mengiranya sebagai prototipe C++.
+static const char CHART_HTML[] PROGMEM = R"rawliteral(<!doctype html>
+<html lang="id"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>SMARTLUX - Riwayat Daya</title>
+<style>
+:root{color-scheme:dark}
+body{margin:0 auto;background:#0b0d10;color:#e7e9ea;font:14px system-ui,sans-serif;padding:20px;max-width:760px}
+h1{font-size:18px;font-weight:600;margin:0 0 4px}
+p.sub{color:#8b949e;margin:0 0 16px}
+canvas{width:100%;height:260px;background:#12151a;border:1px solid #22262e;border-radius:8px}
+.legend{display:flex;gap:16px;color:#8b949e;margin:12px 0;font-size:12px}
+.dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+a{color:#58a6ff;text-decoration:none;font-size:13px}
+a:hover{text-decoration:underline}
+</style></head><body>
+<h1>Riwayat Daya</h1>
+<p class="sub">60 sampel terakhir - diperbarui tiap 2 detik</p>
+<canvas id="c" width="720" height="260"></canvas>
+<div class="legend"><span><i class="dot" style="background:#3fb950"></i>Daya (W)</span><span><i class="dot" style="background:#d29922"></i>Duty lampu (%)</span></div>
+<p><a href="/">&larr; Dashboard</a> &middot; <a href="/api/export">Unduh CSV</a></p>
+<script>
+ const c=document.getElementById('c'),x=c.getContext('2d');
+ const P='#3fb950',D='#d29922',BG='#12151a',GR='#22262e';
+ function line(a,key,max,col){
+  if(!a.length)return;
+  x.strokeStyle=col;x.lineWidth=2;x.beginPath();
+  for(let i=0;i<a.length;i++){
+   const px=i/Math.max(a.length-1,1)*c.width;
+   const py=c.height-a[key]*c.height/max;
+   i?x.lineTo(px,py):x.moveTo(px,py);
+  }
+  x.stroke();
+ }
+ function draw(d){
+  x.fillStyle=BG;x.fillRect(0,0,c.width,c.height);
+  x.strokeStyle=GR;x.lineWidth=1;
+  for(let g=1;g<4;g++){const y=g*c.height/4;x.beginPath();x.moveTo(0,y);x.lineTo(c.width,y);x.stroke();}
+  const a=d.samples||[],pm=Math.max(1,...a.map(s=>s.mw/1000))*1.15;
+  line(a.map(s=>({v:s.mw/1000})),'v',pm,P);
+  line(a,'pwm',255,D);
+ }
+ async function refresh(){
+  try{const r=await fetch('/api/history',{cache:'no-store'});draw(await r.json());}catch(e){}
+ }
+ refresh();setInterval(refresh,2000);
+</script>
+</body></html>
+)rawliteral";
+static_assert(sizeof(CHART_HTML) <= 2560, "CHART_HTML melebihi 2,5 KB");
+
 // ===========================================================================
 // Util
 // ===========================================================================
@@ -577,7 +660,11 @@ static void pollButton() {
 // Sensor cahaya + PIR
 // ===========================================================================
 static void sampleSensors() {
-  g_adc = analogRead(PIN_LDR);
+  // R1: median 5 sampel ADC — buang lonjakan sesaat (gaya ESPHome).
+  g_adcHist[g_adcIdx] = analogRead(PIN_LDR);
+  g_adcIdx = (g_adcIdx + 1) % 5;
+  if (g_adcCount < 5) g_adcCount++;
+  g_adc = adcMedian5(g_adcHist, g_adcCount);
 
   // Histeresis: cegah kedip di sekitar ambang.
   const int light = lightDecision(g_adc, ADC_DARK_ON, ADC_BRIGHT_OFF);
@@ -632,6 +719,30 @@ static void samplePower() {
   const unsigned long dtMs = now - g_lastPowerMs;
   g_lastPowerMs = now;
 
+  // R2: cek kesehatan bus I2C tiap sampel daya, terlepas dari status terakhir.
+  // Probe tetap jalan walaupun INA219 tidak ada saat boot, sehingga pemulihan
+  // tidak pernah "mengunci" diri sendiri. Cooldown 30 s mencegah log banjir.
+  if (!i2cPresent(INA219_ADDR)) {
+    if (g_i2cFails < 3) g_i2cFails++;
+    const bool cooling = g_lastI2cRecoverMs != 0 &&
+                         now - g_lastI2cRecoverMs < I2C_RECOVER_COOLDOWN_MS;
+    if (g_i2cFails >= 3 && !cooling) {
+      Serial.println("# I2C macet, memulihkan bus...");
+      const bool oledWasOk = g_oledOk;
+      Wire.end();
+      Wire.begin(PIN_SDA, PIN_SCL, 100000UL);
+      Wire.setTimeOut(I2C_TIMEOUT_MS);
+      if (oledWasOk) oledBegin();   // jangan hapus OLED bila memang tidak ada
+      inaBegin();
+      g_lastI2cRecoverMs = now;
+      // Penghitung hanya dikosongkan bila probe berikutnya berhasil; kalau
+      // masih gagal, cooldown mengatur kapan percobaan berikutnya dilakukan.
+      if (i2cPresent(INA219_ADDR)) g_i2cFails = 0;
+    }
+  } else {
+    g_i2cFails = 0;
+  }
+
   if (g_inaOk) {
     g_busV = ina219.getBusVoltage_V();
     g_mA  = ina219.getCurrent_mA();
@@ -652,6 +763,21 @@ static void samplePower() {
   }
 
   learnLampPower();
+
+  // R5: riwayat daya 60 x 1 s untuk grafik /chart dan ekspor CSV.
+  uint32_t mw = (g_mW > 65000.0f) ? 65000 : (uint32_t)g_mW;
+  g_hist[g_histHead] = { (uint32_t)(now / 1000UL), (uint16_t)mw, (uint8_t)g_pwm };
+  g_histHead = (g_histHead + 1) % HIST_LEN;
+  if (g_histCount < HIST_LEN) g_histCount++;
+
+  // R3: simpan energi ke NVS tiap 60 s (hemat siklus tulis flash ~100 ribu).
+  if (now - g_lastSaveMs >= ENERGY_SAVE_MS) {
+    g_lastSaveMs = now;
+    g_prefs.putDouble("e_wh", g_energyWh);
+    g_prefs.putDouble("e_lamp", g_lampEnergyWh);
+    g_prefs.putUInt("e_s", (uint32_t)((now - g_energyStartMs) / 1000UL));
+    g_prefs.putDouble("p_lamp", g_lampPowerW);
+  }
 }
 
 // ===========================================================================
@@ -973,7 +1099,7 @@ static void handleStatus() {
     "\"button_state\":\"%s\",\"oled_page\":\"%s\","
     "\"energy_phase\":\"%s\",\"oled_device\":\"%s\","
     "\"ina_device\":\"%s\",\"lamp_state\":\"%s\","
-    "\"boot_phase\":\"%s\"}",
+    "\"boot_phase\":\"%s\",\"lamp_pwm\":%d}",
     g_adc, g_lightPct, (int)(g_lux + 0.5f),
     g_pir ? 1 : 0, g_lamp ? 1 : 0, modeKey(),
     (double)g_busV, (double)g_mA, (double)g_mW,
@@ -981,7 +1107,7 @@ static void handleStatus() {
     bootS, g_ip,
     pirStateKey(), lightStateKey(), buttonPressKey(), oledPageKey(),
     energyPhaseKey(), deviceKey(g_oledDevice), deviceKey(g_inaDevice),
-    lampStateKey(), bootPhaseKey());
+    lampStateKey(), bootPhaseKey(), g_pwm);
 
   server.sendHeader("Cache-Control", "no-store");
   server.sendHeader("X-Content-Type-Options", "nosniff");
@@ -1040,7 +1166,66 @@ static void handleReset() {
   setEnergyPhase(ENERGY_IDLE);
   g_energyStartMs = millis();
   g_lastPowerMs = millis();
+  g_lastSaveMs = millis();
+  // R5: kosongkan riwayat grafik.
+  g_histHead = 0;
+  g_histCount = 0;
+  // R3: hapus juga salinan NVS agar tidak muncul lagi setelah reboot.
+  g_prefs.remove("e_wh");
+  g_prefs.remove("e_lamp");
+  g_prefs.remove("e_s");
+  g_prefs.remove("p_lamp");
   server.send(200, "application/json", "{\"ok\":1}");
+}
+
+// R5: riwayat daya untuk grafik /chart (publik, read-only seperti /api/status).
+static void handleHistory() {
+  char buf[2400];
+  int w = snprintf(buf, sizeof(buf), "{\"n\":%d,\"samples\":[", g_histCount);
+  if (w < 0 || (size_t)w >= sizeof(buf)) {
+    server.send(500, "application/json", "{\"error\":\"buffer\"}");
+    return;
+  }
+  size_t n = (size_t)w;
+  for (int i = 0; i < g_histCount; i++) {
+    const int idx = (g_histHead - g_histCount + i + HIST_LEN) % HIST_LEN;
+    const HistSample &s = g_hist[idx];
+    w = snprintf(buf + n, sizeof(buf) - n, "%s{\"t\":%lu,\"mw\":%u,\"pwm\":%u}",
+                 i ? "," : "", (unsigned long)s.t_s, (unsigned)s.mw, (unsigned)s.pwm);
+    // snprintf mengembalikan panjang "seandainya" tidak terpotong: cek sebelum
+    // menambah offset, dan sisakan 2 byte untuk penutup "]}".
+    if (w < 0 || (size_t)w + 2 >= sizeof(buf) - n) {
+      server.send(500, "application/json", "{\"error\":\"buffer\"}");
+      return;
+    }
+    n += (size_t)w;
+  }
+  n += snprintf(buf + n, sizeof(buf) - n, "]}");
+  server.sendHeader("Cache-Control", "no-store");
+  server.sendHeader("X-Content-Type-Options", "nosniff");
+  server.send(200, "application/json", buf);
+}
+
+// R5: ekspor CSV tanpa menambah PROGMEM pada dashboard.
+static void handleExport() {
+  String csv = "t_s,mw,pwm\r\n";
+  csv.reserve(16 + (size_t)g_histCount * 24);  // kurangi churn heap ESP32
+  for (int i = 0; i < g_histCount; i++) {
+    const int idx = (g_histHead - g_histCount + i + HIST_LEN) % HIST_LEN;
+    const HistSample &s = g_hist[idx];
+    csv += String(s.t_s) + "," + String(s.mw) + "," + String(s.pwm) + "\r\n";
+  }
+  server.sendHeader("Content-Disposition", "attachment; filename=smartlux-history.csv");
+  server.sendHeader("Cache-Control", "no-store");
+  server.sendHeader("X-Content-Type-Options", "nosniff");
+  server.send(200, "text/csv", csv);
+}
+
+static void handleChart() {
+  server.sendHeader("Content-Security-Policy", FPSTR(CSP));
+  server.sendHeader("X-Content-Type-Options", "nosniff");
+  server.sendHeader("Cache-Control", "no-store");
+  server.send_P(200, "text/html", CHART_HTML);
 }
 
 static void handleNotFound() {
@@ -1071,8 +1256,9 @@ void setup() {
   }
 
   pinMode(PIN_PIR, INPUT);
-  pinMode(PIN_MOSFET, OUTPUT);
-  digitalWrite(PIN_MOSFET, LOW);          // aman saat boot
+  // R4: LEDC 1 kHz, 8-bit menggantikan digitalWrite pada gate MOSFET.
+  ledcAttach(PIN_MOSFET, 1000, 8);
+  ledcWrite(PIN_MOSFET, 0);               // aman saat boot
   pinMode(PIN_BTN, INPUT_PULLUP);
   pinMode(PIN_LDR, INPUT);                // GPIO34 input-only
 
@@ -1083,30 +1269,82 @@ void setup() {
   // I2C 3,3 V, 100 kHz (400 kHz diizinkan).
   setBootPhase(BOOT_I2C);
   Wire.begin(PIN_SDA, PIN_SCL, 100000UL);
+  Wire.setTimeOut(I2C_TIMEOUT_MS);
   i2cScan();
   oledBegin();
   inaBegin();
 
+  // R3: pulihkan energi dari NVS (tahan mati listrik / reboot).
+  g_prefs.begin("smartlux", false);
+  g_energyWh = g_prefs.getDouble("e_wh", 0.0);
+  g_lampEnergyWh = g_prefs.getDouble("e_lamp", 0.0);
+  g_lampPowerW = g_prefs.getDouble("p_lamp", LAMP_DEFAULT_W);
+  const uint32_t savedS = g_prefs.getUInt("e_s", 0);
   g_lastPowerMs = millis();
-  g_energyStartMs = millis();
+  // Arimetik uint32_t 32-bit sengaja memakai wrap millis(): baseline tetap
+  // benar selama total uptime kumulatif < ~49,7 hari. Clamp nilai NVS rusak.
+  const uint32_t now32 = (uint32_t)g_lastPowerMs;
+  const uint32_t offsetMs = savedS > (0xFFFFFFFFUL / 1000UL)
+                                ? 0xFFFFFFFFUL : savedS * 1000UL;
+  g_energyStartMs = (unsigned long)(now32 - offsetMs);
+  g_lastSaveMs = millis();
+  if (savedS > 0 || g_energyWh > 0.0) {
+    Serial.printf("# NVS dipulihkan: %.3f Wh (lampu %.3f Wh, %.0f s)\n",
+                  g_energyWh, g_lampEnergyWh, (double)savedS);
+  }
   g_lastPageMs = millis();
+
+  // R2: task watchdog — reset loop() tiap iterasi.
+  esp_task_wdt_config_t wdtCfg = {};   // zero-init: hindari field stack garbage
+  wdtCfg.timeout_ms = WDT_TIMEOUT_MS;
+  wdtCfg.idle_core_mask = 0;
+  wdtCfg.trigger_panic = true;
+  if (esp_task_wdt_reconfigure(&wdtCfg) != ESP_OK) esp_task_wdt_init(&wdtCfg);
+  esp_task_wdt_add(NULL);
 
   setBootPhase(BOOT_NET);
   setupWifi();
+
+  // OTA opt-in: HANYA dengan sandi eksplisit minimal 8 karakter di secrets.h.
+  // Token turunan MAC tidak boleh dipakai: bisa dihitung orang di LAN, padahal
+  // OTA memberi hak unggah firmware sembarangan (RCE). Tanpa sandi kuat, OTA mati.
+#if defined(SMARTLUX_OTA_PASS)
+  if (strlen(SMARTLUX_OTA_PASS) >= 8) {
+    ArduinoOTA.setHostname("smartlux");
+    ArduinoOTA.setPassword(SMARTLUX_OTA_PASS);
+    ArduinoOTA.onStart([]() { Serial.println(F("# OTA mulai")); });
+    ArduinoOTA.onEnd([]() { Serial.println(F("# OTA selesai")); });
+    ArduinoOTA.onError([](ota_error_t e) { Serial.printf("# OTA error %u\n", (unsigned)e); });
+    ArduinoOTA.begin();
+    g_otaEnabled = true;
+    Serial.println(F("# OTA aktif: smartlux.local:8266 (sandi dari secrets.h)"));
+  } else {
+    Serial.println(F("# OTA DINONAKTIFKAN: SMARTLUX_OTA_PASS harus >= 8 karakter."));
+  }
+#else
+  Serial.println(F("# OTA DINONAKTIFKAN: set SMARTLUX_OTA_PASS di secrets.h."));
+#endif
+
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/override", HTTP_GET, handleOverride);
   server.on("/api/reset", HTTP_GET, handleReset);
+  server.on("/api/history", HTTP_GET, handleHistory);
+  server.on("/api/export", HTTP_GET, handleExport);
+  server.on("/chart", HTTP_GET, handleChart);
   server.onNotFound(handleNotFound);
   server.begin();
   Serial.println(F("# Web server aktif di port 80"));
+  Serial.println(F("# Grafik: http://smartlux.local/chart"));
 
   setBootPhase(BOOT_READY);
-  Serial.println(F("t_ms,adc,pir,lamp,mode,v_mv,ma,mw,wh,pir_state,light_state,net,oled_page,energy_phase"));
+  Serial.println(F("t_ms,adc,pir,lamp,mode,v_mv,ma,mw,wh,pir_state,light_state,net,oled_page,energy_phase,pwm"));
 }
 
 void loop() {
   const unsigned long now = millis();
+  esp_task_wdt_reset();       // R2: tandai masih hidup
+  if (g_otaEnabled) ArduinoOTA.handle();  // OTA non-blocking, hanya bila aktif
 
   // Tombol: dicek tiap iterasi (murah, sudah ter-debounce).
   pollButton();
@@ -1126,11 +1364,11 @@ void loop() {
 
     const unsigned long vMv = (unsigned long)(g_busV * 1000.0f + 0.5f);
     // Format CSV untuk prosedur pengukuran proposal.
-    Serial.printf("%lu,%d,%d,%d,%s,%lu,%.1f,%.1f,%.3f,%s,%s,%s,%s,%s\n",
+    Serial.printf("%lu,%d,%d,%d,%s,%lu,%.1f,%.1f,%.3f,%s,%s,%s,%s,%s,%d\n",
                   millis(), g_adc, g_pir ? 1 : 0, g_lamp ? 1 : 0,
                   modeKey(), vMv, (double)g_mA, (double)g_mW, g_energyWh,
                   pirStateKey(), lightStateKey(), netStateKey(),
-                  oledPageKey(), energyPhaseKey());
+                  oledPageKey(), energyPhaseKey(), g_pwm);
   }
 
   // OLED: rotasi 3 dtk, refresh 400 ms (non-blocking).

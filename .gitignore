@@ -4,6 +4,11 @@
 # Firmware secrets — never commit WiFi credentials
 firmware/SMARTLUX/secrets.h
 
+# Local environment files — never commit credentials or tokens
+.env
+.env.*
+!.env.example
+
 # Build output
 .pio/
 firmware/SMARTLUX/.pio/

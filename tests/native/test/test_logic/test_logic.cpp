@@ -127,6 +127,58 @@ void test_lux_estimate(void) {
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1000.0f, luxEstimate(5000, 1000.0f));
 }
 
+// --- ADC median filter (R1) --------------------------------------------------
+void test_adc_median_empty(void) {
+  TEST_ASSERT_EQUAL_INT(0, adcMedian5(nullptr, 0));
+  int s[1] = {123};
+  TEST_ASSERT_EQUAL_INT(0, adcMedian5(s, -1));
+}
+
+void test_adc_median_small_windows(void) {
+  int one[1] = {1500};
+  TEST_ASSERT_EQUAL_INT(1500, adcMedian5(one, 1));
+  int three[3] = {30, 10, 20};
+  TEST_ASSERT_EQUAL_INT(20, adcMedian5(three, 3));
+  int four[4] = {40, 10, 30, 20};
+  TEST_ASSERT_EQUAL_INT(30, adcMedian5(four, 4));  // upper middle for even n
+}
+
+void test_adc_median_rejects_spike(void) {
+  int s[5] = {1500, 1520, 4095, 1490, 1510};
+  TEST_ASSERT_EQUAL_INT(1510, adcMedian5(s, 5));
+  int t[5] = {900, 100, 4000, 1500, 1600};
+  TEST_ASSERT_EQUAL_INT(1500, adcMedian5(t, 5));
+}
+
+void test_adc_median_clamps_to_five(void) {
+  int s[7] = {5, 1, 3, 2, 4, 9999, -9999};
+  TEST_ASSERT_EQUAL_INT(3, adcMedian5(s, 7));  // only first 5 considered
+}
+
+// --- two-level lamp brightness (R4) ------------------------------------------
+void test_brightness_off_is_zero(void) {
+  TEST_ASSERT_EQUAL_INT(0, lampBrightness(false, 0, 10000UL, 0UL, 30000UL, 15000UL));
+  TEST_ASSERT_EQUAL_INT(0, lampBrightness(false, 1, 10000UL, 0UL, 30000UL, 15000UL));
+}
+
+void test_brightness_manual_on_full(void) {
+  // MANUAL_ON ignores the motion timer entirely.
+  TEST_ASSERT_EQUAL_INT(255, lampBrightness(true, 1, 999999UL, 0UL, 30000UL, 15000UL));
+}
+
+void test_brightness_auto_levels(void) {
+  // remaining = delay - elapsed; dim when remaining <= dimMs.
+  TEST_ASSERT_EQUAL_INT(255, lampBrightness(true, 0, 10000UL, 0UL, 30000UL, 15000UL));
+  TEST_ASSERT_EQUAL_INT(255, lampBrightness(true, 0, 14999UL, 0UL, 30000UL, 15000UL));
+  TEST_ASSERT_EQUAL_INT(128, lampBrightness(true, 0, 15000UL, 0UL, 30000UL, 15000UL));
+  TEST_ASSERT_EQUAL_INT(128, lampBrightness(true, 0, 29999UL, 0UL, 30000UL, 15000UL));
+  TEST_ASSERT_EQUAL_INT(0, lampBrightness(true, 0, 30000UL, 0UL, 30000UL, 15000UL));
+}
+
+void test_brightness_motion_resets_timer(void) {
+  TEST_ASSERT_EQUAL_INT(255, lampBrightness(true, 0, 26000UL, 25000UL, 30000UL, 15000UL));
+}
+
 // --- dashboard auth helpers -------------------------------------------------
 void test_format_mac_token(void) {
   char out[16];
@@ -184,6 +236,14 @@ int main(int, char **) {
   RUN_TEST(test_energy_increment);
   RUN_TEST(test_savings);
   RUN_TEST(test_lux_estimate);
+  RUN_TEST(test_adc_median_empty);
+  RUN_TEST(test_adc_median_small_windows);
+  RUN_TEST(test_adc_median_rejects_spike);
+  RUN_TEST(test_adc_median_clamps_to_five);
+  RUN_TEST(test_brightness_off_is_zero);
+  RUN_TEST(test_brightness_manual_on_full);
+  RUN_TEST(test_brightness_auto_levels);
+  RUN_TEST(test_brightness_motion_resets_timer);
   RUN_TEST(test_button_debounce_press_edge);
   RUN_TEST(test_button_debounce_release_edge);
   RUN_TEST(test_button_debounce_bounce_rejected);

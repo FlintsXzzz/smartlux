@@ -20,19 +20,21 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      - name: Guard INDEX_HTML (budget + ino2cpp indentation)
+      - name: Guard PROGMEM pages (budgets + ino2cpp indentation)
         run: |
           set -euo pipefail
           python3 - <<'PY'
           import re, sys
           src = open("firmware/SMARTLUX/SMARTLUX.ino", encoding="utf-8").read()
-          m = re.search(r'R"rawliteral\((.*?)\)rawliteral"', src, re.S)
-          if not m:
-              sys.exit("INDEX_HTML raw literal not found")
-          size = len(m.group(1))
-          print(f"INDEX_HTML = {size} bytes (budget 8192)")
-          if size > 8192:
-              sys.exit("INDEX_HTML exceeds the 8 KB PROGMEM budget")
+          budgets = {"INDEX_HTML": 8192, "CHART_HTML": 2560}
+          for name, budget in budgets.items():
+              m = re.search(re.escape(name) + r'\[\][^=]*=\s*R"rawliteral\((.*?)\)rawliteral"', src, re.S)
+              if not m:
+                  sys.exit(f"{name} raw literal not found")
+              size = len(m.group(1))
+              print(f"{name} = {size} bytes (budget {budget})")
+              if size > budget:
+                  sys.exit(f"{name} exceeds the {budget} byte PROGMEM budget")
           bad = [(i, l) for i, l in enumerate(src.splitlines(), 1)
                  if re.match(r'^(async\s+)?function\s', l)]
           if bad:
@@ -89,3 +91,16 @@ jobs:
 
       - name: Run native unit tests
         run: pio test -d tests/native -e native
+
+  repo-tests:
+    name: Repo invariants
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-node@v7
+        with:
+          node-version: "24"
+
+      - name: Run repo invariant tests
+        run: node --test tests/repo/*.test.js
