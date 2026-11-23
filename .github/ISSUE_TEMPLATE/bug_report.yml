@@ -1,0 +1,50 @@
+name: Laporan bug
+description: Laporkan kesalahan pada firmware, dashboard, enclosure, atau dokumen.
+title: "[bug] "
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Jangan sertakan kata sandi WiFi atau isi `secrets.h`. Untuk masalah
+        keamanan, pakai "Laporan keamanan" pada halaman kontak, bukan issue publik.
+  - type: dropdown
+    id: bagian
+    attributes:
+      label: Bagian
+      options:
+        - Firmware (ESP32)
+        - Dashboard
+        - Enclosure
+        - Dokumen proposal
+        - Lainnya
+    validations:
+      required: true
+  - type: textarea
+    id: apa
+    attributes:
+      label: Apa yang terjadi
+      description: Gejala yang terlihat, termasuk pesan galat bila ada.
+    validations:
+      required: true
+  - type: textarea
+    id: harapan
+    attributes:
+      label: Yang diharapkan
+    validations:
+      required: true
+  - type: textarea
+    id: langkah
+    attributes:
+      label: Langkah mereproduksi
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    id: versi
+    attributes:
+      label: Versi atau commit
+      placeholder: "mis. v0.1.0 atau hash commit"

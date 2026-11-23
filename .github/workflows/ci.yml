@@ -1,0 +1,65 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  firmware:
+    name: Firmware build (ESP32)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Guard INDEX_HTML (budget + ino2cpp indentation)
+        run: |
+          set -euo pipefail
+          python3 - <<'PY'
+          import re, sys
+          src = open("firmware/SMARTLUX/SMARTLUX.ino", encoding="utf-8").read()
+          m = re.search(r'R"rawliteral\((.*?)\)rawliteral"', src, re.S)
+          if not m:
+              sys.exit("INDEX_HTML raw literal not found")
+          size = len(m.group(1))
+          print(f"INDEX_HTML = {size} bytes (budget 8192)")
+          if size > 8192:
+              sys.exit("INDEX_HTML exceeds the 8 KB PROGMEM budget")
+          bad = [(i, l) for i, l in enumerate(src.splitlines(), 1)
+                 if re.match(r'^(async\s+)?function\s', l)]
+          if bad:
+              for i, l in bad:
+                  print(f"::error file=firmware/SMARTLUX/SMARTLUX.ino,line={i}::"
+                        f"JS '{l.strip()}' at column 0 is mistaken for a C++ "
+                        f"prototype by ino2cpp; indent it one space")
+              sys.exit("Indent JS function lines one space for ino2cpp")
+          print("ino2cpp guard OK: no JS function lines at column 0")
+          PY
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Cache PlatformIO
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.platformio
+            ~/.cache/pip
+          key: pio-${{ runner.os }}-${{ hashFiles('firmware/SMARTLUX/platformio.ini') }}
+          restore-keys: |
+            pio-${{ runner.os }}-
+
+      - name: Install PlatformIO
+        run: python -m pip install --upgrade platformio
+
+      - name: Build firmware
+        run: pio run -d firmware/SMARTLUX

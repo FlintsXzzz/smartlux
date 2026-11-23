@@ -1,0 +1,25 @@
+name: Usulan fitur
+description: Usulkan fitur atau perbaikan untuk SMARTLUX.
+title: "[fitur] "
+labels: ["enhancement"]
+body:
+  - type: textarea
+    id: masalah
+    attributes:
+      label: Masalah yang ingin diselesaikan
+      description: Apa yang sulit dilakukan sekarang?
+    validations:
+      required: true
+  - type: textarea
+    id: usulan
+    attributes:
+      label: Usulan
+      description: Perubahan yang diinginkan dan mengapa.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatif
+    attributes:
+      label: Alternatif yang sudah dipertimbangkan
+    validations:
+      required: false

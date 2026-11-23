@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Laporan keamanan
+    url: https://github.com/FlintsXzzz/smartlux/security/advisories/new
+    about: Laporkan kerentanan secara privat. Jangan buka issue publik untuk masalah keamanan.
