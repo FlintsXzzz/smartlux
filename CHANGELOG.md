@@ -8,8 +8,11 @@ dan proyek memakai [Semantic Versioning](https://semver.org/lang/id/).
 
 ### Added
 - Logika keputusan murni diekstrak ke `firmware/SMARTLUX/logic.h` dan diuji dengan
-  Unity di `tests/native/` (`pio test -d tests/native -e native`, 12/12 lulus);
+  Unity di `tests/native/` (`pio test -d tests/native -e native`, 16/16 lulus);
   CI menjalankan job `native-tests` terpisah.
+- `stableButtonState()` di `logic.h` mendebounce tombol override secara murni;
+  `pollButton()` memakainya tanpa mengubah timing 50 ms. Empat tes baru
+  (tepi tekan, tepi lepas, bounce, jendela nol) ditulis lebih dulu (RED).
 
 ### Fixed
 - `luxEstimate()` kini meng-clamp ADC ke 0..4095 seperti `lightPercent()`, sehingga

@@ -541,8 +541,10 @@ static void pollButton() {
     g_btnChangeMs = now;
   }
 
-  if ((now - g_btnChangeMs) >= BTN_DEBOUNCE_MS && raw != g_btnStable) {
-    g_btnStable = raw;
+  const bool stable = stableButtonState(raw, g_btnStable, now, g_btnChangeMs,
+                                        BTN_DEBOUNCE_MS);
+  if (stable != g_btnStable) {
+    g_btnStable = stable;
     if (!g_btnStable) {                    // tepi tekan
       g_btnPressMs = now;
       g_btnLongFired = false;

@@ -95,6 +95,31 @@ void test_savings(void) {
   TEST_ASSERT_DOUBLE_WITHIN(1e-12, 100.0, computeSavingsPct(1.0, 0.0, 3600000UL));
 }
 
+// --- GPIO32 override button: 50 ms debounce -------------------------------
+void test_button_debounce_press_edge(void) {
+  // Pin level: true = HIGH = released, false = LOW = pressed.
+  TEST_ASSERT_TRUE(stableButtonState(true, true, 1000, 1000, 50));   // unchanged
+  TEST_ASSERT_TRUE(stableButtonState(false, true, 1049, 1000, 50));  // 49 ms: keep old
+  TEST_ASSERT_FALSE(stableButtonState(false, true, 1050, 1000, 50)); // 50 ms: accept press
+}
+
+void test_button_debounce_release_edge(void) {
+  TEST_ASSERT_FALSE(stableButtonState(false, false, 2000, 2000, 50));
+  TEST_ASSERT_FALSE(stableButtonState(true, false, 2049, 2000, 50)); // 49 ms: keep pressed
+  TEST_ASSERT_TRUE(stableButtonState(true, false, 2050, 2000, 50));  // 50 ms: accept release
+}
+
+void test_button_debounce_bounce_rejected(void) {
+  // Raw toggles faster than the window, so the debounced level never changes.
+  TEST_ASSERT_TRUE(stableButtonState(false, true, 1010, 1010, 50));
+  TEST_ASSERT_TRUE(stableButtonState(true, true, 1049, 1020, 50));   // 29 ms: still released
+  TEST_ASSERT_TRUE(stableButtonState(true, true, 1070, 1020, 50));   // 50 ms: accept release
+}
+
+void test_button_debounce_zero_window(void) {
+  TEST_ASSERT_FALSE(stableButtonState(false, true, 1000, 1000, 0));  // immediate
+}
+
 void test_lux_estimate(void) {
   // Out-of-range ADC is clamped, so powf never sees a negative base.
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, luxEstimate(-5, 1000.0f));
@@ -116,5 +141,9 @@ int main(int, char **) {
   RUN_TEST(test_energy_increment);
   RUN_TEST(test_savings);
   RUN_TEST(test_lux_estimate);
+  RUN_TEST(test_button_debounce_press_edge);
+  RUN_TEST(test_button_debounce_release_edge);
+  RUN_TEST(test_button_debounce_bounce_rejected);
+  RUN_TEST(test_button_debounce_zero_window);
   return UNITY_END();
 }

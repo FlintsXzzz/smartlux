@@ -66,6 +66,17 @@ static inline bool motionActive(unsigned long now, unsigned long lastMotionMs,
   return (now - lastMotionMs) < delayMs;
 }
 
+// Debounced level for the override button (true = HIGH = released). `previous`
+// is the last stable level; `raw` is accepted only after staying unchanged for
+// debounceMs. Unsigned subtraction keeps millis() rollover harmless.
+static inline bool stableButtonState(bool raw, bool previous,
+                                     unsigned long nowMs,
+                                     unsigned long lastChangeMs,
+                                     unsigned long debounceMs) {
+  if ((nowMs - lastChangeMs) < debounceMs) return previous;
+  return raw;
+}
+
 // Energy for one sample: V * I * dt, with dt in milliseconds and I in mA.
 static inline double energyIncrementWh(float volts, float milliamps,
                                        unsigned long dtMs) {
