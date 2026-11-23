@@ -95,6 +95,9 @@ static const double LAMP_DEFAULT_W = 3.0;
 
 // --- Mode override ----------------------------------------------------------
 enum Mode { MODE_AUTO = 0, MODE_MANUAL_ON = 1, MODE_MANUAL_OFF = 2 };
+static_assert((int)MODE_AUTO == 0 && (int)MODE_MANUAL_ON == 1 &&
+                  (int)MODE_MANUAL_OFF == 2,
+              "logic.h assumes AUTO=0, ON=1, OFF=2");
 enum NetState { NET_CONNECTING = 0, NET_STA = 1, NET_AP = 2 };
 
 // --- Status global ----------------------------------------------------------
@@ -188,62 +191,65 @@ static void setLampState(LampState s) {
 }
 static void setBootPhase(BootPhase s) { g_bootPhase = s; }
 
-static const __FlashStringHelper* buttonPressKey() {
+// Kunci status ini dipakai sebagai argumen "%s" di snprintf/printf, jadi
+// tipenya const char* (sama seperti modeKey). Di ESP32 F() hanya
+// reinterpret_cast, bukan salinan RAM, sehingga literal tetap di rodata.
+static const char *buttonPressKey() {
   switch (g_btnPress) {
-    case BTN_PRESSED: return F("pressed");
-    case BTN_SHORT_FIRED: return F("short");
-    case BTN_LONG_FIRED: return F("long");
-    default: return F("idle");
+    case BTN_PRESSED: return "pressed";
+    case BTN_SHORT_FIRED: return "short";
+    case BTN_LONG_FIRED: return "long";
+    default: return "idle";
   }
 }
-static const __FlashStringHelper* pirStateKey() {
+static const char *pirStateKey() {
   switch (g_pirState) {
-    case PIR_WARMUP: return F("warmup");
-    case PIR_MOTION: return F("motion");
-    case PIR_QUIET: return F("quiet");
-    default: return F("armed");
+    case PIR_WARMUP: return "warmup";
+    case PIR_MOTION: return "motion";
+    case PIR_QUIET: return "quiet";
+    default: return "armed";
   }
 }
-static const __FlashStringHelper* lightStateKey() {
-  return (g_lightState == LIGHT_DARK) ? F("dark") : F("bright");
+static const char *lightStateKey() {
+  return (g_lightState == LIGHT_DARK) ? "dark" : "bright";
 }
-static const __FlashStringHelper* oledPageKey() {
+static const char *oledPageKey() {
   switch (g_oledPageState) {
-    case PAGE_POWER: return F("power");
-    case PAGE_ENERGY: return F("energy");
-    default: return F("light");
+    case PAGE_POWER: return "power";
+    case PAGE_ENERGY: return "energy";
+    default: return "light";
   }
 }
-static const __FlashStringHelper* energyPhaseKey() {
+static const char *energyPhaseKey() {
   switch (g_energyPhase) {
-    case ENERGY_LEARNING: return F("learning");
-    case ENERGY_READY: return F("ready");
-    default: return F("idle");
+    case ENERGY_LEARNING: return "learning";
+    case ENERGY_READY: return "ready";
+    default: return "idle";
   }
 }
-static const __FlashStringHelper* deviceKey(DeviceState s) {
-  return (s == DEV_OK) ? F("ok") : F("missing");
+static const char *deviceKey(DeviceState s) {
+  return (s == DEV_OK) ? "ok" : "missing";
 }
-static const __FlashStringHelper* lampStateKey() {
+static const char *lampStateKey() {
   switch (g_lampState) {
-    case LAMP_ON: return F("on");
-    case LAMP_FORCED_OFF: return F("forced_off");
-    default: return F("off");
+    case LAMP_ON: return "on";
+    case LAMP_FORCED_OFF: return "forced_off";
+    default: return "off";
   }
 }
-static const __FlashStringHelper* bootPhaseKey() {
+static const char *bootPhaseKey() {
   switch (g_bootPhase) {
-    case BOOT_I2C: return F("i2c");
-    case BOOT_NET: return F("net");
-    case BOOT_READY: return F("ready");
-    default: return F("init");
+    case BOOT_I2C: return "i2c";
+    case BOOT_NET: return "net";
+    case BOOT_READY: return "ready";
+    default: return "init";
   }
 }
-static const __FlashStringHelper* netStateKey() {
+static const char *netStateKey() {
   switch (g_net) {
-    case NET_CONNECTING: return F("connecting");
-    case NET_AP: return F("ap");
-    default: return F("sta");
+    case NET_CONNECTING: return "connecting";
+    case NET_AP: return "ap";
+    default: return "sta";
   }
 }
 

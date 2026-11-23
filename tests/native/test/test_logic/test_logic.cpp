@@ -95,6 +95,13 @@ void test_savings(void) {
   TEST_ASSERT_DOUBLE_WITHIN(1e-12, 100.0, computeSavingsPct(1.0, 0.0, 3600000UL));
 }
 
+void test_lux_estimate(void) {
+  // Out-of-range ADC is clamped, so powf never sees a negative base.
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 0.0f, luxEstimate(-5, 1000.0f));
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1000.0f, luxEstimate(4095, 1000.0f));
+  TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1000.0f, luxEstimate(5000, 1000.0f));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_warmup_forces_off);
@@ -108,5 +115,6 @@ int main(int, char **) {
   RUN_TEST(test_motion_active);
   RUN_TEST(test_energy_increment);
   RUN_TEST(test_savings);
+  RUN_TEST(test_lux_estimate);
   return UNITY_END();
 }

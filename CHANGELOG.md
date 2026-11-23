@@ -8,8 +8,13 @@ dan proyek memakai [Semantic Versioning](https://semver.org/lang/id/).
 
 ### Added
 - Logika keputusan murni diekstrak ke `firmware/SMARTLUX/logic.h` dan diuji dengan
-  Unity di `tests/native/` (`pio test -d tests/native -e native`, 11/11 lulus);
+  Unity di `tests/native/` (`pio test -d tests/native -e native`, 12/12 lulus);
   CI menjalankan job `native-tests` terpisah.
+
+### Fixed
+- `luxEstimate()` kini meng-clamp ADC ke 0..4095 seperti `lightPercent()`, sehingga
+  pembacaan di luar rentang tidak menghasilkan `NaN` pada `lux_est`.
+- `static_assert` mengunci `enum Mode` ke 0/1/2 sesuai asumsi `logic.h`.
 
 ## [0.1.0] - 2026-11-23
 

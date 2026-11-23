@@ -54,6 +54,8 @@ static inline int lightPercent(int adc) {
 
 // Rough lux estimate for the non-linear LDR; full scale at ADC 4095.
 static inline float luxEstimate(int adc, float fullScale) {
+  if (adc < 0) adc = 0;
+  if (adc > 4095) adc = 4095;
   const float ratio = (float)adc / 4095.0f;
   return fullScale * powf(ratio, 2.2f);
 }
