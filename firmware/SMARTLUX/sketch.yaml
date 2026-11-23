@@ -1,0 +1,15 @@
+# Profil arduino-cli untuk build yang dapat direproduksi.
+# Pakai: arduino-cli compile --profile smartlux firmware/SMARTLUX
+# Tanpa default_profile, perintah `arduino-cli compile --fqbn ...` tetap memakai
+# core dan library yang terpasang di sistem, seperti sebelumnya.
+profiles:
+  smartlux:
+    fqbn: esp32:esp32:esp32
+    platforms:
+      - platform: esp32:esp32 (3.3.12)
+        platform_index_url: https://raw.githubusercontent.com/espressif/arduino-esp32/gh-pages/package_esp32_index.json
+    libraries:
+      - Adafruit SSD1306 (2.5.17)
+      - Adafruit GFX Library (1.13.0)
+      - Adafruit BusIO (1.17.4)
+      - Adafruit INA219 (1.2.3)

@@ -32,6 +32,7 @@ cp firmware/SMARTLUX/secrets.example.h firmware/SMARTLUX/secrets.h
 
 # 2. Build (pilih salah satu)
 arduino-cli compile --fqbn esp32:esp32:esp32 firmware/SMARTLUX
+arduino-cli compile --profile smartlux firmware/SMARTLUX   # versi terkunci (sketch.yaml)
 pio run -d firmware/SMARTLUX
 
 # 3. Upload & monitor
@@ -63,3 +64,13 @@ Halaman tunggal inline (tanpa CDN), polling 1 detik, menampilkan kondisi lampu, 
 ## Status pengembangan
 
 Firmware lolos kompilasi dengan Arduino CLI dan PlatformIO. Pengujian fisik berikut masih menunggu prototipe nyata: kalibrasi LDR/INA219 terhadap multimeter, uji dashboard via LAN, cetak dan dry-fit casing, serta verifikasi skema terhadap rangkaian akhir sebelum diberi daya.
+
+## Keamanan
+
+Lihat [kebijakan keamanan](.github/SECURITY.md) untuk cara melaporkan kerentanan. Perangkat ini ditujukan untuk jaringan lokal yang dipercaya. Kredensial WiFi ada di `firmware/SMARTLUX/secrets.h`, yang di-ignore git.
+
+## Lisensi
+
+- Kode (firmware, OpenSCAD, harness) — [MIT](LICENSE).
+- Dokumen proposal `proposal_SMARTLUX_Kelompok_2.md` — CC BY 4.0.
+
