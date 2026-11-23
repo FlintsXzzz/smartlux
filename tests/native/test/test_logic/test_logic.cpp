@@ -127,6 +127,49 @@ void test_lux_estimate(void) {
   TEST_ASSERT_FLOAT_WITHIN(1e-3f, 1000.0f, luxEstimate(5000, 1000.0f));
 }
 
+// --- dashboard auth helpers -------------------------------------------------
+void test_format_mac_token(void) {
+  char out[16];
+  TEST_ASSERT_TRUE(formatMacToken(0ULL, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("000000000000", out);
+  TEST_ASSERT_TRUE(formatMacToken(0xAABBCCDDEEFFULL, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("aabbccddeeff", out);
+  TEST_ASSERT_FALSE(formatMacToken(0xAABBCCDDEEFFULL, out, 12));  // needs NUL
+}
+
+void test_token_equals(void) {
+  TEST_ASSERT_TRUE(tokenEquals("abc", "abc"));
+  TEST_ASSERT_FALSE(tokenEquals("abc", "abd"));       // last char differs
+  TEST_ASSERT_FALSE(tokenEquals("abc", "abcd"));      // length differs
+  TEST_ASSERT_TRUE(tokenEquals("", ""));
+  TEST_ASSERT_FALSE(tokenEquals(nullptr, "abc"));
+  TEST_ASSERT_FALSE(tokenEquals("abc", nullptr));
+}
+
+void test_valid_cookie_value(void) {
+  TEST_ASSERT_TRUE(validCookieValue("aabbccddeeff", 64));
+  TEST_ASSERT_TRUE(validCookieValue("Ab-9_x.y", 64));
+  TEST_ASSERT_FALSE(validCookieValue("", 64));
+  TEST_ASSERT_FALSE(validCookieValue("a;b", 64));
+  TEST_ASSERT_FALSE(validCookieValue("a b", 64));
+  TEST_ASSERT_FALSE(validCookieValue("a=b", 64));
+  TEST_ASSERT_FALSE(validCookieValue("a,b", 64));
+  TEST_ASSERT_FALSE(validCookieValue("0123456789", 5));
+}
+
+void test_find_cookie_value(void) {
+  char out[SLX_TOKEN_MAX_LEN + 1];
+  TEST_ASSERT_TRUE(findCookieValue("smartlux_auth=aabbccddeeff", "smartlux_auth",
+                                   out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("aabbccddeeff", out);
+  TEST_ASSERT_TRUE(findCookieValue("foo=1; smartlux_auth=aabbcc ; bar=2",
+                                   "smartlux_auth", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("aabbcc", out);
+  TEST_ASSERT_FALSE(findCookieValue("smartlux_authx=aabbcc", "smartlux_auth",
+                                    out, sizeof(out)));
+  TEST_ASSERT_FALSE(findCookieValue("foo=1", "smartlux_auth", out, sizeof(out)));
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_warmup_forces_off);
@@ -145,5 +188,9 @@ int main(int, char **) {
   RUN_TEST(test_button_debounce_release_edge);
   RUN_TEST(test_button_debounce_bounce_rejected);
   RUN_TEST(test_button_debounce_zero_window);
+  RUN_TEST(test_format_mac_token);
+  RUN_TEST(test_token_equals);
+  RUN_TEST(test_valid_cookie_value);
+  RUN_TEST(test_find_cookie_value);
   return UNITY_END();
 }

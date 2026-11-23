@@ -6,8 +6,12 @@
 #pragma once
 
 #include <math.h>
+#include <stddef.h>
 #include <stdint.h>
 #include <string.h>
+
+// Dashboard auth token: SMARTLUX_TOKEN from secrets.h, or a 12-hex MAC fallback.
+#define SLX_TOKEN_MAX_LEN 64u
 
 // Mode encoding matches `enum Mode` in SMARTLUX.ino:
 //   AUTO = 0, MANUAL_ON = 1, MANUAL_OFF = 2
@@ -94,4 +98,90 @@ static inline double computeSavingsPct(double lampPowerW, double lampEnergyWh,
   if (s < 0.0) s = 0.0;
   if (s > 100.0) s = 100.0;
   return s;
+}
+
+// --- Dashboard token auth ----------------------------------------------------
+
+// Format a 48-bit MAC as 12 lowercase hex digits + NUL.
+static inline bool formatMacToken(uint64_t mac, char *out, size_t outLen) {
+  if (!out || outLen < 13u) return false;
+  static const char kHex[] = "0123456789abcdef";
+  for (int i = 11; i >= 0; --i) {
+    out[i] = kHex[mac & 0xFu];
+    mac >>= 4;
+  }
+  out[12] = '\0';
+  return true;
+}
+
+// Constant-time, NULL-safe token comparison.
+static inline bool tokenEquals(const char *a, const char *b) {
+  if (!a || !b) return false;
+  size_t ia = 0, ib = 0;
+  unsigned char diff = 0;
+  for (;;) {
+    const char ca = a[ia], cb = b[ib];
+    diff |= (unsigned char)(ca ^ cb);
+    if (ca == '\0' && cb == '\0') break;
+    if (ca != '\0') ++ia;
+    if (cb != '\0') ++ib;
+  }
+  return diff == 0;
+}
+
+// Cookie values use only letters, digits, '_', '-' and '.'. Length 1..maxLen.
+static inline bool validCookieValue(const char *value, size_t maxLen) {
+  if (!value || maxLen == 0) return false;
+  size_t n = 0;
+  for (const char *p = value; *p; ++p) {
+    const unsigned char c = (unsigned char)*p;
+    const bool ok = (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '_' || c == '-' || c == '.';
+    if (!ok) return false;
+    if (++n > maxLen) return false;
+  }
+  return n >= 1;
+}
+
+// Extract cookie `name` from a Cookie header into out. Exact key match.
+static inline bool findCookieValue(const char *header, const char *name,
+                                   char *out, size_t outLen) {
+  if (!header || !name || !out || outLen == 0) return false;
+  size_t nameLen = 0;
+  while (name[nameLen]) ++nameLen;
+  if (nameLen == 0) return false;
+  const char *p = header;
+  while (*p) {
+    while (*p == ' ' || *p == '\t' || *p == ';') ++p;
+    if (!*p) break;
+    const char *key = p;
+    while (*p && *p != '=' && *p != ';') ++p;
+    size_t keyLen = (size_t)(p - key);
+    while (keyLen > 0 && key[keyLen - 1] == ' ') --keyLen;
+    const char *value = NULL;
+    if (*p == '=') {
+      ++p;
+      while (*p == ' ' || *p == '\t') ++p;
+      value = p;
+      while (*p && *p != ';') ++p;
+    }
+    if (value && keyLen == nameLen) {
+      bool match = true;
+      for (size_t i = 0; i < nameLen; ++i) {
+        if (key[i] != name[i]) { match = false; break; }
+      }
+      if (match) {
+        size_t valueLen = (size_t)(p - value);
+        while (valueLen > 0 && (value[valueLen - 1] == ' ' ||
+                                value[valueLen - 1] == '\t' ||
+                                value[valueLen - 1] == '\r')) --valueLen;
+        if (valueLen == 0 || valueLen >= outLen) return false;
+        for (size_t i = 0; i < valueLen; ++i) out[i] = value[i];
+        out[valueLen] = '\0';
+        return true;
+      }
+    }
+    if (*p == ';') ++p;
+  }
+  return false;
 }

@@ -69,6 +69,8 @@ Firmware lolos kompilasi dengan Arduino CLI dan PlatformIO. Pengujian fisik beri
 
 Lihat [kebijakan keamanan](.github/SECURITY.md) untuk cara melaporkan kerentanan. Perangkat ini ditujukan untuk jaringan lokal yang dipercaya. Kredensial WiFi ada di `firmware/SMARTLUX/secrets.h`, yang di-ignore git.
 
+Aksi dashboard (`/api/override`, `/api/reset`) dilindungi token: daftar sekali lewat `http://smartlux.local/?t=<token>`, lalu cookie `smartlux_auth` dipakai browser. `/api/status` tetap bisa dibaca tanpa token. Token turunan MAC hanya untuk demo di LAN yang dipercaya; set `SMARTLUX_TOKEN` di `firmware/SMARTLUX/secrets.h` untuk pemakaian lain.
+
 ## Lisensi
 
 - Kode (firmware, OpenSCAD, harness) — [MIT](LICENSE).

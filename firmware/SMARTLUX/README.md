@@ -165,3 +165,7 @@ yang berubah hanya cara membaca dan menelusuri status. Gunakan `GET /api/status`
 Kunci lama di `/api/status` dan empat endpoint tidak dihapus; sembilan kunci status
 baru ditambahkan di bagian akhir JSON. Kolom CSV ditambahkan di akhir agar parser
 lama yang membaca delapan kolom pertama tetap bekerja.
+
+## Autentikasi dashboard
+
+Aksi `/api/override` dan `/api/reset` memerlukan cookie `smartlux_auth`. Token berasal dari `SMARTLUX_TOKEN` di `secrets.h`, atau 12 digit heksadesimal MAC ESP32 yang dicetak ke Serial saat boot bersama URL pendaftaran. Buka `http://smartlux.local/?t=<token>` sekali untuk mendapat cookie `HttpOnly; SameSite=Strict; Path=/`. `/api/status` tetap publik untuk dashboard. Jika `secrets.h` tidak ada, token turunan MAC dapat dihitung oleh siapa pun di LAN — pakai hanya untuk demo pada jaringan lokal yang dipercaya. Token harus 1–64 karakter `[A-Za-z0-9_.-]`; karakter Base64 (`+`, `/`, `=`) ditolak.

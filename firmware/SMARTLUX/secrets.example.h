@@ -19,3 +19,16 @@
 // menurunkan sandi dari MAC perangkat sehingga tidak ada sandi tetap di repo.
 // Kalau diaktifkan, pakai minimal 8 karakter untuk WPA2 dan jangan di-commit.
 // #define SMARTLUX_AP_PASS "ganti-sandi-ap"
+
+// Token dashboard (opsional). Jika SMARTLUX_TOKEN tidak didefinisikan, firmware
+// memakai 12 digit heksadesimal dari MAC WiFi sebagai token dan mencetaknya di
+// Serial beserta URL enroll: http://smartlux.local/?t=<token>
+// Token turunan MAC TIDAK aman terhadap orang yang bisa melihat MAC di LAN;
+// gunakan hanya untuk demo di jaringan tepercaya. Untuk pemakaian nyata, set
+// token sendiri di secrets.h (jangan di-commit).
+//
+// Aturan token: 1-64 karakter, hanya huruf, angka, '_', '-', dan '.'.
+// Jangan pakai Base64 ('+', '/', '=') karena ditolak sebagai nilai cookie.
+// Enroll sekali lewat /?t=<token>; setelah itu browser menyimpan cookie
+// HttpOnly SameSite=Strict. Token juga tercatat di riwayat browser.
+// #define SMARTLUX_TOKEN "ganti-token-panjang-dan-unik"

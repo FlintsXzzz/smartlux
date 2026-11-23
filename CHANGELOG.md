@@ -37,8 +37,11 @@ Rilis pertama: firmware terkompilasi, dashboard, enclosure, dan dokumen proposal
 - Infrastruktur repo: MIT `LICENSE`, `.github/SECURITY.md`, `sketch.yaml`
   (profil `smartlux` terkunci tanpa `default_profile`), workflow CI build,
   template issue/PR, `CODEOWNERS`, dan `dependabot.yml` untuk GitHub Actions.
+- Autentikasi token untuk aksi dashboard (`/api/override`, `/api/reset`): token dari `SMARTLUX_TOKEN` atau turunan MAC, pendaftaran sekali via `/?t=<token>` dengan cookie `smartlux_auth` (HttpOnly, SameSite=Strict, Path=/), helper murni di `logic.h`, serta validasi token saat boot. `/api/status` tetap publik. 20 tes native.
 
 ### Security
+
+- Token dashboard turunan MAC dapat dihitung dari MAC WiFi yang terlihat di LAN; gunakan `SMARTLUX_TOKEN` di luar demo. Token pendaftaran tercatat di riwayat browser; halaman sudah `Cache-Control: no-store`.
 - Kredensial WiFi disimpan di `secrets.h` yang diabaikan git; kata sandi AP
   berasal dari `SMARTLUX_AP_PASS` atau diturunkan dari MAC (`smartlux-xxxx`).
 - Secret scanning, push protection, pembaruan keamanan Dependabot, dan

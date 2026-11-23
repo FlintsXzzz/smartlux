@@ -143,6 +143,10 @@ static unsigned long g_mdnsRetryMs = 0;
 static char g_ip[16] = "0.0.0.0";
 static char g_apSsid[32] = "SMARTLUX";
 
+// --- Akses dashboard: token sekali pakai -> cookie sesi -------------
+static const char AUTH_COOKIE[] = "smartlux_auth";
+static char g_token[SLX_TOKEN_MAX_LEN + 1] = {0};
+
 // --- OLED ------------------------------------------------------------------
 #define SCREEN_WIDTH  128
 #define SCREEN_HEIGHT 64
@@ -927,7 +931,28 @@ static const char CSP[] PROGMEM =
   "connect-src 'self'; img-src 'self' data:; base-uri 'none'; "
   "form-action 'none'; frame-ancestors 'none'";
 
+static bool isAuthenticated() {
+  const String cookie = server.header("Cookie");
+  if (!cookie.length()) return false;
+  char value[SLX_TOKEN_MAX_LEN + 1];
+  if (!findCookieValue(cookie.c_str(), AUTH_COOKIE, value, sizeof(value))) return false;
+  if (!validCookieValue(value, SLX_TOKEN_MAX_LEN)) return false;
+  return tokenEquals(value, g_token);
+}
+
 static void handleRoot() {
+  if (server.hasArg("t")) {
+    const String t = server.arg("t");
+    if (!validCookieValue(t.c_str(), SLX_TOKEN_MAX_LEN) ||
+        !tokenEquals(t.c_str(), g_token)) {
+      server.send(401, "application/json", "{\"error\":\"token tidak valid\"}");
+      return;
+    }
+    char cookie[SLX_TOKEN_MAX_LEN + 52];
+    snprintf(cookie, sizeof(cookie),
+             "smartlux_auth=%s; HttpOnly; SameSite=Strict; Path=/", g_token);
+    server.sendHeader("Set-Cookie", cookie);
+  }
   server.sendHeader("Cache-Control", "no-store");
   server.sendHeader("X-Content-Type-Options", "nosniff");
   server.sendHeader("X-Frame-Options", "DENY");
@@ -968,6 +993,10 @@ static void handleOverride() {
     server.send(403, "application/json", "{\"error\":\"lintas asal ditolak\"}");
     return;
   }
+  if (!isAuthenticated()) {
+    server.send(401, "application/json", "{\"error\":\"perlu token\"}");
+    return;
+  }
   if (!server.hasArg("mode")) {
     server.send(400, "application/json", "{\"error\":\"mode wajib\"}");
     return;
@@ -993,6 +1022,10 @@ static void handleOverride() {
 static void handleReset() {
   if (!sameOrigin()) {
     server.send(403, "application/json", "{\"error\":\"lintas asal ditolak\"}");
+    return;
+  }
+  if (!isAuthenticated()) {
+    server.send(401, "application/json", "{\"error\":\"perlu token\"}");
     return;
   }
   if (!actionAllowed()) {
@@ -1022,6 +1055,20 @@ void setup() {
   Serial.begin(115200);
   Serial.println();
   Serial.println(F("# SMARTLUX v2 - ESP32"));
+
+#if defined(SMARTLUX_TOKEN)
+  strncpy(g_token, SMARTLUX_TOKEN, SLX_TOKEN_MAX_LEN);
+  g_token[SLX_TOKEN_MAX_LEN] = '\0';
+  Serial.println(F("# Token SMARTLUX: dari secrets.h"));
+#else
+  formatMacToken(ESP.getEfuseMac(), g_token, sizeof(g_token));
+  Serial.printf("# Token SMARTLUX: %s\n", g_token);
+  Serial.printf("# Enroll: http://smartlux.local/?t=%s\n", g_token);
+  Serial.println(F("# PERINGATAN: token turunan MAC bisa dihitung orang di LAN. Set SMARTLUX_TOKEN di secrets.h."));
+#endif
+  if (!validCookieValue(g_token, SLX_TOKEN_MAX_LEN)) {
+    Serial.println(F("# ERROR: token tidak valid. Pakai 1-64 karakter [A-Za-z0-9_.-]."));
+  }
 
   pinMode(PIN_PIR, INPUT);
   pinMode(PIN_MOSFET, OUTPUT);
