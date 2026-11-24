@@ -31,7 +31,7 @@ jobs:
               m = re.search(re.escape(name) + r'\[\][^=]*=\s*R"rawliteral\((.*?)\)rawliteral"', src, re.S)
               if not m:
                   sys.exit(f"{name} raw literal not found")
-              size = len(m.group(1))
+              size = len(m.group(1).encode("utf-8"))
               print(f"{name} = {size} bytes (budget {budget})")
               if size > budget:
                   sys.exit(f"{name} exceeds the {budget} byte PROGMEM budget")

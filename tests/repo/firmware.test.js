@@ -6,8 +6,9 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
+const os = require('node:os');
 const path = require('node:path');
-const { execSync } = require('node:child_process');
+const { execSync, execFileSync } = require('node:child_process');
 
 const ROOT = path.join(__dirname, '..', '..');
 const FIRMWARE_DIR = path.join(ROOT, 'firmware', 'SMARTLUX');
@@ -123,4 +124,57 @@ test('firmware sources exist', () => {
   assert.ok(fs.existsSync(INO), 'firmware/SMARTLUX/SMARTLUX.ino is missing');
   assert.ok(fs.existsSync(LOGIC), 'firmware/SMARTLUX/logic.h is missing');
   assert.ok(fs.existsSync(SECRETS_EXAMPLE), 'firmware/SMARTLUX/secrets.example.h is missing');
+});
+
+// The CI guard must agree with tests/repo/firmware.test.js (Buffer.byteLength)
+// and the firmware static_assert (sizeof): budgets are in UTF-8 BYTES, not
+// Unicode code points. A non-ASCII dashboard payload can be within budget in
+// characters while already over budget in bytes.
+function ciProgmemGuard() {
+  const yml = fs.readFileSync(path.join(ROOT, '.github', 'workflows', 'ci.yml'), 'utf8');
+  const heredoc = yml.match(/python3 - <<'PY'\r?\n([\s\S]*?)\r?\n[ \t]*PY\b/);
+  assert.ok(heredoc, 'CI PROGMEM guard heredoc not found');
+  const lines = heredoc[1].split(/\r?\n/);
+  const indent = Math.min(
+    ...lines.filter((line) => line.trim()).map((line) => line.match(/^[ \t]*/)[0].length)
+  );
+  return lines.map((line) => line.slice(indent)).join('\n');
+}
+
+test('CI PROGMEM guard measures UTF-8 bytes, not characters', () => {
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'smartlux-ci-guard-'));
+  try {
+    const sketchDir = path.join(tmp, 'firmware', 'SMARTLUX');
+    fs.mkdirSync(sketchDir, { recursive: true });
+    // 8192 characters but 16384 bytes: under budget for len(), over for bytes.
+    const payload = 'é'.repeat(INDEX_HTML_BUDGET_BYTES);
+    fs.writeFileSync(
+      path.join(sketchDir, 'SMARTLUX.ino'),
+      `const char INDEX_HTML[] PROGMEM = R"rawliteral(${payload})rawliteral";\n` +
+        'const char CHART_HTML[] PROGMEM = R"rawliteral(ok)rawliteral";\n'
+    );
+
+    let rejected = false;
+    let output = '';
+    try {
+      output = execFileSync('python3', ['-c', ciProgmemGuard()], {
+        cwd: tmp,
+        encoding: 'utf8',
+        stdio: ['ignore', 'pipe', 'pipe'],
+      });
+    } catch (err) {
+      rejected = true;
+      output = `${err.stdout || ''}${err.stderr || ''}${err.message}`;
+    }
+
+    assert.equal(
+      rejected,
+      true,
+      `CI guard accepted a ${Buffer.byteLength(payload, 'utf8')}-byte payload ` +
+        `(${payload.length} characters):\n${output}`
+    );
+    assert.match(output, /exceeds the 8192 byte PROGMEM budget/);
+  } finally {
+    fs.rmSync(tmp, { recursive: true, force: true });
+  }
 });
