@@ -13,36 +13,44 @@
 // Dashboard auth token: SMARTLUX_TOKEN from secrets.h, or a 12-hex MAC fallback.
 #define SLX_TOKEN_MAX_LEN 64u
 
-// Shared mode code so pure helpers never hard-code a literal; SMARTLUX.ino
-// static_asserts that its enum matches this value.
+// Shared mode codes so pure helpers never hard-code a literal. SMARTLUX.ino
+// static_asserts that its enum matches these values; this header asserts the
+// same contract so host tests catch a drift too.
+#define SLX_MODE_AUTO 0
 #define SLX_MODE_MANUAL_ON 1
+#define SLX_MODE_MANUAL_OFF 2
+#define SLX_MODE_COUNT 3
+static_assert(SLX_MODE_AUTO == 0 && SLX_MODE_MANUAL_ON == 1 &&
+                  SLX_MODE_MANUAL_OFF == 2 &&
+                  SLX_MODE_COUNT == SLX_MODE_MANUAL_OFF + 1,
+              "logic.h mode codes must stay AUTO=0, ON=1, OFF=2");
 
 // Mode encoding matches `enum Mode` in SMARTLUX.ino:
 //   AUTO = 0, MANUAL_ON = 1, MANUAL_OFF = 2
 // Returns whether the lamp should be ON for the given sensors and mode.
 static inline bool lampShouldBeOn(int mode, bool pirReady, bool dark, bool motion) {
-  if (!pirReady) return false;  // PIR warm-up: force a safe OFF
-  if (mode == 1) return true;   // MANUAL_ON ignores the sensors
-  if (mode == 2) return false;  // MANUAL_OFF ignores the sensors
-  return dark && motion;        // AUTO: dark AND motion (delay-off handled by caller)
+  if (!pirReady) return false;                   // PIR warm-up: force a safe OFF
+  if (mode == SLX_MODE_MANUAL_ON) return true;   // MANUAL_ON ignores the sensors
+  if (mode == SLX_MODE_MANUAL_OFF) return false; // MANUAL_OFF ignores the sensors
+  return dark && motion;                         // AUTO: dark AND motion (delay-off by caller)
 }
 
 // Next mode when the override button cycles: AUTO -> ON -> OFF -> AUTO.
-static inline int cycleModeValue(int mode) { return (mode + 1) % 3; }
+static inline int cycleModeValue(int mode) { return (mode + 1) % SLX_MODE_COUNT; }
 
-// Parse a /api/override `mode` argument. Returns 0/1/2, or -1 when invalid.
+// Parse a /api/override `mode` argument. Returns AUTO/ON/OFF, or -1 when invalid.
 static inline int parseMode(const char *m) {
   if (!m) return -1;
-  if (!strcmp(m, "auto")) return 0;
-  if (!strcmp(m, "on")) return 1;
-  if (!strcmp(m, "off")) return 2;
+  if (!strcmp(m, "auto")) return SLX_MODE_AUTO;
+  if (!strcmp(m, "on")) return SLX_MODE_MANUAL_ON;
+  if (!strcmp(m, "off")) return SLX_MODE_MANUAL_OFF;
   return -1;
 }
 
 // JSON/log key for a mode: "auto" | "on" | "off".
 static inline const char *modeKeyFor(int mode) {
-  if (mode == 1) return "on";
-  if (mode == 2) return "off";
+  if (mode == SLX_MODE_MANUAL_ON) return "on";
+  if (mode == SLX_MODE_MANUAL_OFF) return "off";
   return "auto";
 }
 
@@ -53,18 +61,22 @@ static inline int lightDecision(int adc, int darkOn, int brightOff) {
   return -1;
 }
 
+// Clamp a 12-bit ADC reading into 0..4095 (shared LDR input range). Keeping
+// this in one place means powf() can never see a negative base.
+static inline int clampAdc(int adc) {
+  if (adc < 0) return 0;
+  if (adc > 4095) return 4095;
+  return adc;
+}
+
 // Map a 12-bit ADC reading to 0..100 %, clamped.
 static inline int lightPercent(int adc) {
-  if (adc < 0) adc = 0;
-  if (adc > 4095) adc = 4095;
-  return (int)((long)adc * 100L / 4095L);
+  return (int)((long)clampAdc(adc) * 100L / 4095L);
 }
 
 // Rough lux estimate for the non-linear LDR; full scale at ADC 4095.
 static inline float luxEstimate(int adc, float fullScale) {
-  if (adc < 0) adc = 0;
-  if (adc > 4095) adc = 4095;
-  const float ratio = (float)adc / 4095.0f;
+  const float ratio = (float)clampAdc(adc) / 4095.0f;
   return fullScale * powf(ratio, 2.2f);
 }
 
