@@ -19,3 +19,6 @@ compile_commands.json
 # Tool caches and stray local files
 .ruff_cache/
 *netcfg_apply_pre.ps1
+
+# Local hookify rules (per-user, not shared)
+.claude/*.local.md
