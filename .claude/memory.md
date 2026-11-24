@@ -18,7 +18,7 @@ Update it when a decision or verification result changes — not per edit.
 ## Verification commands (the real gates)
 
 ```bash
-node --test tests/repo/                                   # document + firmware + hygiene invariants
+node --test tests/repo/*.test.js                           # document + firmware + hygiene invariants (Node 24 needs the glob form)
 pio test -d tests/native -e native                        # pure logic unit tests
 arduino-cli compile --fqbn esp32:esp32:esp32 firmware/SMARTLUX
 pio run -d firmware/SMARTLUX                              # needs src_dir = . (already set)
