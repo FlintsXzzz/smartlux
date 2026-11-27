@@ -54,6 +54,9 @@
 #if __has_include("secrets.h")
   #include "secrets.h"
 #endif
+// R6: board glue MQTT. Include SETELAH secrets.h agar define MQTT_* terlihat;
+// file ini tidak menyentuh g_net/variabel global lain yang dideklarasikan di bawah.
+#include "mqtt.h"
 
 // Sandi AP tidak punya nilai bawaan di sini. Sumbernya secrets.h, atau
 // diturunkan dari MAC perangkat oleh apPassword().
@@ -68,10 +71,14 @@ static const int PIN_BTN    = 32;  // tombol override, INPUT_PULLUP, aktif LOW
 
 static const uint8_t OLED_ADDR   = 0x3C;
 static const uint8_t INA219_ADDR = 0x40;
+static const uint8_t BH1750_ADDR = 0x23;  // lux digital opsional (I2C)
 
 // --- Waktu (semua non-blocking, berbasis millis()) --------------------------
 static const unsigned long PIR_WARMUP_MS    = 60000UL; // warm-up HC-SR501
-static const unsigned long DELAY_OFF_MS     = 30000UL; // tunda mati setelah gerak
+static const unsigned long DELAY_DEFAULT_MS = 30000UL; // default tunda mati
+static const unsigned long DELAY_MIN_MS     = 5000UL;  // batas /api/config
+static const unsigned long DELAY_MAX_MS     = 200000UL;
+static const unsigned long BH_SAMPLE_MS     = 500UL;   // baca BH1750
 static const unsigned long SENSOR_SAMPLE_MS = 200UL;   // baca LDR/PIR
 static const unsigned long POWER_SAMPLE_MS  = 1000UL;  // INA219 + energi + CSV
 static const unsigned long OLED_PAGE_MS     = 3000UL;  // rotasi halaman
@@ -104,6 +111,19 @@ static const float LUX_FULL_SCALE = 1000.0f;
 // Daya lampu awal (W) sebelum hasil belajar tersedia. CONTOH - ganti.
 static const double LAMP_DEFAULT_W = 3.0;
 
+// BH1750 (opsional): lux SI, histeresis 50/80 lux. Bila sensor tidak ada,
+// firmware otomatis memakai ambang ADC di atas.
+static const float LUX_DARK_ON    = 50.0f;
+static const float LUX_BRIGHT_OFF = 80.0f;
+
+// PWM lampu: default 1 kHz, hanya frekuensi ini yang diterima /api/config.
+static const int PWM_DEFAULT_HZ = 1000;
+
+// Ketidakpastian untuk margin penghematan (persen, 1 sigma):
+// energi INA219 +/-2% (sistem), baseline daya lampu +/-5%.
+static const double SAVINGS_ENERGY_ERR_PCT   = 2.0;
+static const double SAVINGS_BASELINE_ERR_PCT = 5.0;
+
 // --- Mode override ----------------------------------------------------------
 enum Mode { MODE_AUTO = 0, MODE_MANUAL_ON = 1, MODE_MANUAL_OFF = 2 };
 static_assert((int)MODE_AUTO == 0 && (int)MODE_MANUAL_ON == 1 &&
@@ -124,6 +144,12 @@ static int   g_adc = 0;
 static int   g_lightPct = 0;
 static float g_lux = 0.0f;
 static unsigned long g_lastMotionMs = 0;
+// Tier 1: lux BH1750 + konfigurasi runtime (tahan reboot lewat NVS).
+static float g_luxBh = 0.0f;
+static bool  g_bhOk = false;
+static unsigned long g_lastBhMs = 0;
+static unsigned long g_delayOffMs = DELAY_DEFAULT_MS;
+static int   g_pwmHz = PWM_DEFAULT_HZ;
 
 // --- INA219 / energi --------------------------------------------------------
 static bool  g_inaOk = false;
@@ -221,7 +247,7 @@ static void setLampState(LampState s) {
   g_lamp = (s == LAMP_ON);
   // R4: PWM dua tingkat (255 penuh / 128 redup / 0 mati) via LEDC 1 kHz.
   g_pwm = lampBrightness(g_lamp, (int)g_mode, millis(), g_lastMotionMs,
-                         DELAY_OFF_MS, DIM_WINDOW_MS);
+                         g_delayOffMs, DIM_WINDOW_MS);
   ledcWrite(PIN_MOSFET, (uint32_t)g_pwm);
 }
 static void setBootPhase(BootPhase s) { g_bootPhase = s; }
@@ -455,8 +481,9 @@ refresh();setInterval(refresh,1000);
 // Anggaran PROGMEM dari gan-harness/spec.md: gagal saat kompilasi bila terlampaui.
 static_assert(sizeof(INDEX_HTML) <= 8192, "Dashboard INDEX_HTML melebihi 8 KB");
 
-// Halaman grafik riwayat (R5). Baris `function` sengaja di-indent 1 spasi agar
-// ino2cpp PlatformIO tidak mengiranya sebagai prototipe C++.
+// Halaman grafik riwayat + kontrol runtime (R5 + Tier 1). Baris `function`
+// sengaja di-indent 1 spasi agar ino2cpp PlatformIO tidak mengiranya sebagai
+// prototipe C++.
 static const char CHART_HTML[] PROGMEM = R"rawliteral(<!doctype html>
 <html lang="id"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -465,27 +492,41 @@ static const char CHART_HTML[] PROGMEM = R"rawliteral(<!doctype html>
 :root{color-scheme:dark}
 body{margin:0 auto;background:#0b0d10;color:#e7e9ea;font:14px system-ui,sans-serif;padding:20px;max-width:760px}
 h1{font-size:18px;font-weight:600;margin:0 0 4px}
-p.sub{color:#8b949e;margin:0 0 16px}
-canvas{width:100%;height:260px;background:#12151a;border:1px solid #22262e;border-radius:8px}
+p.sub{color:#8b949e;margin:0 0 12px}
+canvas{width:100%;height:240px;background:#12151a;border:1px solid #22262e;border-radius:8px}
 .legend{display:flex;gap:16px;color:#8b949e;margin:12px 0;font-size:12px}
 .dot{display:inline-block;width:8px;height:8px;border-radius:50%;margin-right:6px}
+.row{display:flex;flex-wrap:wrap;gap:12px;align-items:center;margin:10px 0;padding:12px;background:#12151a;border:1px solid #22262e;border-radius:8px}
+.row label{color:#8b949e;font-size:12px}
+input,select{background:#0b0d10;color:#e7e9ea;border:1px solid #2c313a;border-radius:6px;padding:6px 8px;font:inherit}
+input{width:72px}
+button{background:#238636;color:#fff;border:0;border-radius:6px;padding:7px 14px;font:inherit;cursor:pointer}
+button:focus-visible,a:focus-visible{outline:2px solid #58a6ff;outline-offset:2px}
+#msg{font-size:12px;color:#8b949e}
 a{color:#58a6ff;text-decoration:none;font-size:13px}
 a:hover{text-decoration:underline}
+.meta{font-size:12px;color:#8b949e;line-height:1.6;margin:0 0 12px}
 </style></head><body>
 <h1>Riwayat Daya</h1>
-<p class="sub">60 sampel terakhir - diperbarui tiap 2 detik</p>
-<canvas id="c" width="720" height="260"></canvas>
+<p class="sub">60 sampel terakhir &middot; diperbarui tiap 2 detik</p>
+<p class="meta" id="meta">lux - &middot; penghematan -</p>
+<canvas id="c" width="720" height="240"></canvas>
 <div class="legend"><span><i class="dot" style="background:#3fb950"></i>Daya (W)</span><span><i class="dot" style="background:#d29922"></i>Duty lampu (%)</span></div>
+<div class="row">
+<label for="d">Delay mati (5-200 s)</label><input id="d" type="number" min="5" max="200" step="1">
+<label for="p">PWM</label><select id="p"><option>100</option><option>500</option><option>1000</option><option>5000</option></select>
+<button id="s">Simpan</button><span id="msg" role="status"></span>
+</div>
 <p><a href="/">&larr; Dashboard</a> &middot; <a href="/api/export">Unduh CSV</a></p>
 <script>
- const c=document.getElementById('c'),x=c.getContext('2d');
+ const c=document.getElementById('c'),x=c.getContext('2d'),$=id=>document.getElementById(id);
  const P='#3fb950',D='#d29922',BG='#12151a',GR='#22262e';
  function line(a,key,max,col){
   if(!a.length)return;
   x.strokeStyle=col;x.lineWidth=2;x.beginPath();
   for(let i=0;i<a.length;i++){
    const px=i/Math.max(a.length-1,1)*c.width;
-   const py=c.height-a[key]*c.height/max;
+   const py=c.height-a[i][key]*c.height/max;
    i?x.lineTo(px,py):x.moveTo(px,py);
   }
   x.stroke();
@@ -494,18 +535,36 @@ a:hover{text-decoration:underline}
   x.fillStyle=BG;x.fillRect(0,0,c.width,c.height);
   x.strokeStyle=GR;x.lineWidth=1;
   for(let g=1;g<4;g++){const y=g*c.height/4;x.beginPath();x.moveTo(0,y);x.lineTo(c.width,y);x.stroke();}
-  const a=d.samples||[],pm=Math.max(1,...a.map(s=>s.mw/1000))*1.15;
-  line(a.map(s=>({v:s.mw/1000})),'v',pm,P);
-  line(a,'pwm',255,D);
+  const a=(d.samples||[]).map(s=>({w:s.mw/1000,p:s.pwm}));
+  const pm=Math.max(1,...a.map(s=>s.w))*1.15;
+  line(a,'w',pm,P);line(a,'p',255,D);
+ }
+ async function meta(){
+  try{
+   const s=await(await fetch('/api/status',{cache:'no-store'})).json();
+   const lux=s.lux_bh>0?s.lux_bh.toFixed(1)+' lx (BH1750)':s.lux_est.toFixed(0)+' lx (estimasi LDR)';
+   $('meta').textContent=lux+' \u00b7 penghematan '+s.savings_pct.toFixed(1)+'% \u00b1 '+s.savings_margin_pp.toFixed(1)+' pp (dihitung dari daya terukur)';
+   if(document.activeElement!==$('d'))$('d').value=s.delay_s;
+   if(document.activeElement!==$('p'))$('p').value=s.pwm_hz;
+  }catch(e){}
  }
  async function refresh(){
   try{const r=await fetch('/api/history',{cache:'no-store'});draw(await r.json());}catch(e){}
+  meta();
  }
+ $('s').onclick=async()=>{
+  const d=$('d').value,p=$('p').value;
+  $('msg').textContent='menyimpan...';
+  try{
+   const r=await fetch('/api/config?delay='+d+'&pwm='+p,{cache:'no-store'});
+   $('msg').textContent=r.ok?'tersimpan':'gagal ('+r.status+')';
+  }catch(e){$('msg').textContent='gagal';}
+ };
  refresh();setInterval(refresh,2000);
 </script>
 </body></html>
 )rawliteral";
-static_assert(sizeof(CHART_HTML) <= 2560, "CHART_HTML melebihi 2,5 KB");
+static_assert(sizeof(CHART_HTML) <= 4096, "CHART_HTML melebihi 4 KB");
 
 // ===========================================================================
 // Util
@@ -534,6 +593,13 @@ static void ipToStr(const IPAddress &ip, char *out, size_t n) {
 static double savingsPct() {
   return computeSavingsPct(g_lampPowerW, g_lampEnergyWh,
                            (unsigned long)(millis() - g_energyStartMs));
+}
+
+// Ketidakpastian angka hemat (poin persen), dari galat INA219 + baseline.
+static double savingsMargin() {
+  return savingsMarginPct(g_lampPowerW, g_lampEnergyWh,
+                          (unsigned long)(millis() - g_energyStartMs),
+                          SAVINGS_ENERGY_ERR_PCT, SAVINGS_BASELINE_ERR_PCT);
 }
 
 // ===========================================================================
@@ -593,6 +659,33 @@ static void inaBegin() {
   Serial.println(F("# INA219 siap (0x40, 32V_2A)"));
 }
 
+// BH1750 opsional: lux SI langsung, alamat 0x23 (tidak bentrok dengan OLED/INA).
+// Bila tidak ada, firmware tetap memakai LDR + luxEstimate().
+static void bhBegin() {
+  if (!i2cPresent(BH1750_ADDR)) {
+    g_bhOk = false;
+    Serial.println(F("# BH1750 tidak ditemukan di 0x23 - pakai LDR"));
+    return;
+  }
+  Wire.beginTransmission(BH1750_ADDR);
+  Wire.write(0x01);                       // power on
+  if (Wire.endTransmission() != 0) {
+    g_bhOk = false;
+    Serial.println(F("# BH1750 gagal power-on - pakai LDR"));
+    return;
+  }
+  Wire.beginTransmission(BH1750_ADDR);
+  Wire.write(0x10);                       // continuous H-res (1 lx, ~120 ms)
+  if (Wire.endTransmission() != 0) {
+    g_bhOk = false;
+    Serial.println(F("# BH1750 gagal mulai - pakai LDR"));
+    return;
+  }
+  g_bhOk = true;
+  g_lastBhMs = millis();
+  Serial.println(F("# BH1750 siap (0x23)"));
+}
+
 // ===========================================================================
 // Kontrol lampu
 // ===========================================================================
@@ -606,7 +699,7 @@ static void setMode(Mode m) {
   g_mode = m;
   if (m == MODE_AUTO) {
     // Butuh gerakan baru agar lampu menyala kembali setelah mode manual.
-    g_lastMotionMs = millis() - DELAY_OFF_MS;
+    g_lastMotionMs = millis() - g_delayOffMs;
   }
   applyControl();
   Serial.printf("# mode -> %s\n", modeKey());
@@ -666,15 +759,26 @@ static void sampleSensors() {
   if (g_adcCount < 5) g_adcCount++;
   g_adc = adcMedian5(g_adcHist, g_adcCount);
 
+  // BH1750 opsional: lux SI asli, dibaca tiap 500 ms.
+  if (g_bhOk && (millis() - g_lastBhMs) >= BH_SAMPLE_MS) {
+    g_lastBhMs = millis();
+    if (Wire.requestFrom(BH1750_ADDR, (uint8_t)2) == 2) {
+      const uint16_t raw = ((uint16_t)Wire.read() << 8) | (uint16_t)Wire.read();
+      g_luxBh = bh1750Lux(raw);
+    }
+  }
+
   // Histeresis: cegah kedip di sekitar ambang.
-  const int light = lightDecision(g_adc, ADC_DARK_ON, ADC_BRIGHT_OFF);
+  // Sensor digital (lux SI) dipakai bila ada; kalau tidak, jalur ADC LDR.
+  const int light = g_bhOk ? lightDecisionLux(g_luxBh, LUX_DARK_ON, LUX_BRIGHT_OFF)
+                           : lightDecision(g_adc, ADC_DARK_ON, ADC_BRIGHT_OFF);
   if (light == 0)      setLightState(LIGHT_DARK);
   else if (light == 1) setLightState(LIGHT_BRIGHT);
 
   g_lightPct = lightPercent(g_adc);
 
-  // Estimasi lux kasar (non-linear, LDR): terang penuh ~LUX_FULL_SCALE.
-  g_lux = luxEstimate(g_adc, LUX_FULL_SCALE);
+  // Lux: BH1750 bila ada, selain itu estimasi kasar non-linear dari LDR.
+  g_lux = g_bhOk ? g_luxBh : luxEstimate(g_adc, LUX_FULL_SCALE);
 
   const bool pirRaw = (digitalRead(PIN_PIR) == HIGH);
   g_pir = pirRaw;
@@ -683,7 +787,7 @@ static void sampleSensors() {
   g_pirReady = (millis() >= PIR_WARMUP_MS);
   if (!g_pirReady) {
     g_pir = false;
-    g_lastMotionMs = millis() - DELAY_OFF_MS;
+    g_lastMotionMs = millis() - g_delayOffMs;
     setPirState(PIR_WARMUP);
   } else if (pirRaw) {
     g_lastMotionMs = millis();
@@ -692,7 +796,7 @@ static void sampleSensors() {
     setPirState(PIR_QUIET);
   }
 
-  g_motion = motionActive(millis(), g_lastMotionMs, DELAY_OFF_MS);
+  g_motion = motionActive(millis(), g_lastMotionMs, g_delayOffMs);
   applyControl();
 }
 
@@ -734,6 +838,7 @@ static void samplePower() {
       Wire.setTimeOut(I2C_TIMEOUT_MS);
       if (oledWasOk) oledBegin();   // jangan hapus OLED bila memang tidak ada
       inaBegin();
+      bhBegin();                    // BH1750 ikut pulih setelah bus reset
       g_lastI2cRecoverMs = now;
       // Penghitung hanya dikosongkan bila probe berikutnya berhasil; kalau
       // masih gagal, cooldown mengatur kapan percobaan berikutnya dilakukan.
@@ -1086,11 +1191,13 @@ static void handleRoot() {
   server.send_P(200, "text/html", INDEX_HTML);
 }
 
-static void handleStatus() {
-  char json[768];
+// R6: one formatter for both HTTP /api/status and MQTT telemetry. Keeping a
+// single snprintf means the dashboard and the broker can never drift apart.
+// Returns the JSON byte count, or -1 when the buffer is too small.
+static int buildStatusJson(char *json, size_t n) {
   const unsigned long bootS = millis() / 1000UL;
 
-  snprintf(json, sizeof(json),
+  const int w = snprintf(json, n,
     "{\"light_adc\":%d,\"light_pct\":%d,\"lux_est\":%d,\"pir\":%d,\"lamp\":%d,"
     "\"mode\":\"%s\",\"voltage_v\":%.2f,\"current_ma\":%.1f,\"power_mw\":%.1f,"
     "\"energy_wh\":%.3f,\"lamp_energy_wh\":%.3f,\"savings_pct\":%.1f,"
@@ -1099,7 +1206,8 @@ static void handleStatus() {
     "\"button_state\":\"%s\",\"oled_page\":\"%s\","
     "\"energy_phase\":\"%s\",\"oled_device\":\"%s\","
     "\"ina_device\":\"%s\",\"lamp_state\":\"%s\","
-    "\"boot_phase\":\"%s\",\"lamp_pwm\":%d}",
+    "\"boot_phase\":\"%s\",\"lamp_pwm\":%d,"
+    "\"lux_bh\":%.1f,\"delay_s\":%lu,\"pwm_hz\":%d,\"savings_margin_pp\":%.2f}",
     g_adc, g_lightPct, (int)(g_lux + 0.5f),
     g_pir ? 1 : 0, g_lamp ? 1 : 0, modeKey(),
     (double)g_busV, (double)g_mA, (double)g_mW,
@@ -1107,7 +1215,19 @@ static void handleStatus() {
     bootS, g_ip,
     pirStateKey(), lightStateKey(), buttonPressKey(), oledPageKey(),
     energyPhaseKey(), deviceKey(g_oledDevice), deviceKey(g_inaDevice),
-    lampStateKey(), bootPhaseKey(), g_pwm);
+    lampStateKey(), bootPhaseKey(), g_pwm,
+    (double)g_luxBh, g_delayOffMs / 1000UL, g_pwmHz, savingsMargin());
+
+  return (w > 0 && (size_t)w < n) ? w : -1;
+}
+
+static void handleStatus() {
+  char json[1024];
+  const int n = buildStatusJson(json, sizeof(json));
+  if (n < 0) {
+    server.send(500, "application/json", "{\"error\":\"status terlalu panjang\"}");
+    return;
+  }
 
   server.sendHeader("Cache-Control", "no-store");
   server.sendHeader("X-Content-Type-Options", "nosniff");
@@ -1176,6 +1296,69 @@ static void handleReset() {
   g_prefs.remove("e_s");
   g_prefs.remove("p_lamp");
   server.send(200, "application/json", "{\"ok\":1}");
+}
+
+// Tier 1: konfigurasi runtime (delay-off 5-200 s, frekuensi PWM) tanpa reflash.
+// Tanpa argumen = baca publik; dengan argumen = sesi + gate rate.
+static void handleConfig() {
+  const bool hasDelay = server.hasArg("delay");
+  const bool hasPwm = server.hasArg("pwm");
+
+  if (!hasDelay && !hasPwm) {
+    char json[96];
+    snprintf(json, sizeof(json),
+             "{\"delay_s\":%lu,\"pwm_hz\":%d,\"bh1750\":%s}",
+             g_delayOffMs / 1000UL, g_pwmHz, g_bhOk ? "true" : "false");
+    server.send(200, "application/json", json);
+    return;
+  }
+  if (!sameOrigin()) {
+    server.send(403, "application/json", "{\"error\":\"lintas asal ditolak\"}");
+    return;
+  }
+  if (!isAuthenticated()) {
+    server.send(401, "application/json", "{\"error\":\"perlu token\"}");
+    return;
+  }
+
+  // Validasi penuh dulu: nilai salah tidak boleh menghabiskan slot gate.
+  long delayS = (long)(g_delayOffMs / 1000UL);
+  int pwmHz = g_pwmHz;
+  if (hasDelay) {
+    delayS = server.arg("delay").toInt();
+    if (!validDelaySeconds((int)delayS)) {
+      server.send(400, "application/json", "{\"error\":\"delay harus 5-200 detik\"}");
+      return;
+    }
+  }
+  if (hasPwm) {
+    pwmHz = server.arg("pwm").toInt();
+    if (!pwmFrequencyAllowed(pwmHz)) {
+      server.send(400, "application/json", "{\"error\":\"pwm harus 100/500/1000/5000 Hz\"}");
+      return;
+    }
+  }
+  if (!actionAllowed()) {
+    server.sendHeader("Retry-After", "1");
+    server.send(429, "application/json", "{\"error\":\"terlalu sering, tunggu sebentar\"}");
+    return;
+  }
+
+  if (hasDelay) {
+    g_delayOffMs = (unsigned long)delayS * 1000UL;
+    g_prefs.putUInt("delay_s", (uint32_t)delayS);
+  }
+  if (hasPwm) {
+    g_pwmHz = pwmHz;
+    ledcChangeFrequency(PIN_MOSFET, (uint32_t)g_pwmHz, 8);
+    g_prefs.putUInt("pwm_hz", (uint32_t)pwmHz);
+  }
+  applyControl();
+
+  char json[64];
+  snprintf(json, sizeof(json), "{\"ok\":1,\"delay_s\":%lu,\"pwm_hz\":%d}",
+           g_delayOffMs / 1000UL, g_pwmHz);
+  server.send(200, "application/json", json);
 }
 
 // R5: riwayat daya untuk grafik /chart (publik, read-only seperti /api/status).
@@ -1255,9 +1438,19 @@ void setup() {
     Serial.println(F("# ERROR: token tidak valid. Pakai 1-64 karakter [A-Za-z0-9_.-]."));
   }
 
+  // Konfigurasi runtime dari NVS (delay-off & frekuensi PWM) harus dibaca
+  // SEBELUM ledcAttach agar PWM langsung memakai frekuensi tersimpan.
+  g_prefs.begin("smartlux", false);
+  {
+    const uint32_t delayS = g_prefs.getUInt("delay_s", DELAY_DEFAULT_MS / 1000UL);
+    const uint32_t pwmHz = g_prefs.getUInt("pwm_hz", PWM_DEFAULT_HZ);
+    if (validDelaySeconds((int)delayS)) g_delayOffMs = (unsigned long)delayS * 1000UL;
+    if (pwmFrequencyAllowed((int)pwmHz)) g_pwmHz = (int)pwmHz;
+  }
+
   pinMode(PIN_PIR, INPUT);
-  // R4: LEDC 1 kHz, 8-bit menggantikan digitalWrite pada gate MOSFET.
-  ledcAttach(PIN_MOSFET, 1000, 8);
+  // R4: LEDC 8-bit menggantikan digitalWrite pada gate MOSFET.
+  ledcAttach(PIN_MOSFET, (uint32_t)g_pwmHz, 8);
   ledcWrite(PIN_MOSFET, 0);               // aman saat boot
   pinMode(PIN_BTN, INPUT_PULLUP);
   pinMode(PIN_LDR, INPUT);                // GPIO34 input-only
@@ -1273,9 +1466,9 @@ void setup() {
   i2cScan();
   oledBegin();
   inaBegin();
+  bhBegin();                              // Tier 1: BH1750 opsional (0x23)
 
   // R3: pulihkan energi dari NVS (tahan mati listrik / reboot).
-  g_prefs.begin("smartlux", false);
   g_energyWh = g_prefs.getDouble("e_wh", 0.0);
   g_lampEnergyWh = g_prefs.getDouble("e_lamp", 0.0);
   g_lampPowerW = g_prefs.getDouble("p_lamp", LAMP_DEFAULT_W);
@@ -1325,10 +1518,14 @@ void setup() {
   Serial.println(F("# OTA DINONAKTIFKAN: set SMARTLUX_OTA_PASS di secrets.h."));
 #endif
 
+  // MQTT opt-in (R6): hanya jalan bila SMARTLUX_ENABLE_MQTT didefinisikan.
+  mqttBegin();
+
   server.on("/", HTTP_GET, handleRoot);
   server.on("/api/status", HTTP_GET, handleStatus);
   server.on("/api/override", HTTP_GET, handleOverride);
   server.on("/api/reset", HTTP_GET, handleReset);
+  server.on("/api/config", HTTP_GET, handleConfig);
   server.on("/api/history", HTTP_GET, handleHistory);
   server.on("/api/export", HTTP_GET, handleExport);
   server.on("/chart", HTTP_GET, handleChart);
@@ -1340,6 +1537,21 @@ void setup() {
   setBootPhase(BOOT_READY);
   Serial.println(F("t_ms,adc,pir,lamp,mode,v_mv,ma,mw,wh,pir_state,light_state,net,oled_page,energy_phase,pwm"));
 }
+
+// R6: jembatan MQTT -> status firmware. Dibungkus #if supaya build dasar
+// tetap byte-for-byte identik (tidak ada symbol/kode mati yang ikut terbit).
+#if defined(SMARTLUX_ENABLE_MQTT)
+static void pollMqtt() {
+  const bool ready = (g_net == NET_STA) && (WiFi.status() == WL_CONNECTED);
+  if (mqttWantsState(ready)) {
+    char json[768];
+    const int n = buildStatusJson(json, sizeof(json));
+    mqttPoll(ready, json, n > 0 ? (size_t)n : 0u);
+  } else {
+    mqttPoll(ready, nullptr, 0u);
+  }
+}
+#endif
 
 void loop() {
   const unsigned long now = millis();
@@ -1374,7 +1586,11 @@ void loop() {
   // OLED: rotasi 3 dtk, refresh 400 ms (non-blocking).
   pollOled();
 
-  // Jaringan + HTTP.
+  // Jaringan + HTTP. MQTT dipanggil terakhir: non-blocking, memakai JSON
+  // status yang sama dengan /api/status (satu formatter, buildStatusJson).
   pollNetwork();
   server.handleClient();
+#if defined(SMARTLUX_ENABLE_MQTT)
+  pollMqtt();
+#endif
 }

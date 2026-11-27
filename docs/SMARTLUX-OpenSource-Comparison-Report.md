@@ -442,6 +442,8 @@ Publish `unique_id` derived from MAC address to avoid duplicate entities [40]. I
 
 **Recommendation:** Implement MQTT as a **compile-time opt-in** (`#ifdef ENABLE_MQTT`) to preserve flash budget for schools without a broker. This is consistent with WLED's usermod optional compilation pattern [3].
 
+**Status (2026-11-27): ADOPTED / IMPLEMENTED.** Landed as R6 with a compile-time `SMARTLUX_ENABLE_MQTT` gate in git-ignored `secrets.h`; the base build is unchanged. Implementation differs from the sketch above in three evidence-based ways: `setBufferSize(1536)` (the device + origin + attributes block can reach ~850 B), `setConnectionTimeout(2000)` on the ESP32 `NetworkClient` (not `Stream::setTimeout`, which only bounds reads), and telemetry that mirrors the full `/api/status` JSON through a shared `buildStatusJson()` rather than a second hand-written payload. Nine retained read-only HA entities use nested `homeassistant/<component>/...` topics, `~` abbreviation, `expire_after: 60`, and a retained QoS-1 LWT. `PubSubClient@2.8` is pinned in both build systems; CI builds four combinations (base / MQTT / OTA / both) with a 90% flash ceiling. Measured: `esp32dev-mqtt` 1,041,763 B (79.5%) and `esp32dev-mqtt-ota` 1,061,606 B (81.0%) — comfortably below the ceiling. Verification against a real LAN broker and HA instance remains a hardware gate.
+
 ---
 
 ### R7 🔧 OTA Firmware Updates (Value: MEDIUM / Effort: MEDIUM — flash-constrained)
@@ -535,7 +537,7 @@ This reduces average WiFi current without breaking connectivity. Measured saving
 | R3 | NVS energy persistence | None | 2 h | 0 B (SDK) | Energy accuracy | **NOW** |
 | R4 | LEDC PWM dimming (2-level) | None | 2–3 h | ~0 B | Energy + UX | **SHORT TERM** |
 | R5 | In-browser history chart | None | 4–6 h | ~2–3 KB PROGMEM | Dashboard UX | **SHORT TERM** |
-| R6 | MQTT + HA discovery (opt-in) | None | 4–6 h | ~20 KB | Integration | **MEDIUM TERM** |
+| R6 | MQTT + HA discovery (opt-in) | None | 4–6 h | ~9 KB (MQTT-only), ~25 KB with OTA | Integration | **IMPLEMENTED (2026-11-27)** |
 | R7 | OTA updates (ArduinoOTA) | None | 2 h | ~12 KB | Maintenance | **MEDIUM TERM** |
 | R8 | Daily/monthly energy buckets | None | 1 h | ~0 B | Energy UX | **WITH R3** |
 | R9 | WiFi modem sleep | None | 0.5 h | 0 B | Power | **OPTIONAL** |

@@ -13,3 +13,4 @@ profiles:
       - Adafruit GFX Library (1.13.0)
       - Adafruit BusIO (1.17.4)
       - Adafruit INA219 (1.2.3)
+      - PubSubClient (2.8)

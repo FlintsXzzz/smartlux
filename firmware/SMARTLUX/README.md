@@ -76,31 +76,41 @@ sekolah yang memblokir multicast sering gagal menerjemahkan `.local`; pakai IP.
 | Endpoint | Fungsi |
 |---|---|
 | `GET /` | dashboard (HTML/CSS/JS inline, tanpa CDN), polling 1 dtk |
-| `GET /api/status` | JSON: `light_adc, light_pct, lux_est, pir, lamp, mode, voltage_v, current_ma, power_mw, energy_wh, lamp_energy_wh, savings_pct, uptime_s, ip` + status tambahan `pir_state, light_state, button_state, oled_page, energy_phase, oled_device, ina_device, lamp_state, boot_phase, lamp_pwm` |
+| `GET /api/status` | JSON: `light_adc, light_pct, lux_est, pir, lamp, mode, voltage_v, current_ma, power_mw, energy_wh, lamp_energy_wh, savings_pct, uptime_s, ip` + status tambahan `pir_state, light_state, button_state, oled_page, energy_phase, oled_device, ina_device, lamp_state, boot_phase, lamp_pwm, lux_bh, delay_s, pwm_hz, savings_margin_pp` |
 | `GET /api/override?mode=auto\|on\|off` | paksa AUTO / NYALA / MATI |
 | `GET /api/reset` | nol-kan energi terhitung, riwayat, dan nilai tersimpan di NVS (daya lampu hasil belajar ikut dihapus) |
+| `GET /api/config` | tanpa argumen: JSON `delay_s, pwm_hz, bh1750` (publik). Dengan `?delay=5..200&pwm=100\|500\|1000\|5000`: ubah konfigurasi runtime (butuh token + gate 300 ms), disimpan ke NVS |
 | `GET /api/history` | JSON 60 sampel terakhir (`t` detik, `mw`, `pwm`) untuk grafik; publik, hanya baca |
 | `GET /api/export` | unduh CSV `t_s,mw,pwm` dari riwayat yang sama |
-| `GET /chart` | halaman grafik daya dan duty lampu (PROGMEM, tanpa CDN) |
+| `GET /chart` | halaman grafik daya + duty, ringkasan lux/penghematan, dan kontrol delay/PWM (PROGMEM, tanpa CDN) |
 
-`/api/override` dan `/api/reset` dibatasi satu aksi per 300 ms; aksi berikutnya
-dalam jendela itu mendapat `429` dengan `Retry-After: 1`. `/api/status` tidak
-dibatasi supaya polling 1 detik tidak terpengaruh. Dashboard mengirim header CSP
-yang menolak semua muatan dari alamat lain, sementara blok style/script inline
-tetap diizinkan. `/api/history`, `/api/export`, dan `/chart` bersifat publik dan
-hanya baca, seperti `/api/status`; ketiganya memakai `Cache-Control: no-store`.
+`/api/override`, `/api/reset`, dan penulisan `/api/config` dibatasi satu aksi per
+300 ms; aksi berikutnya dalam jendela itu mendapat `429` dengan `Retry-After: 1`.
+`/api/status` dan pembacaan `/api/config` tidak dibatasi supaya polling 1 detik
+tidak terpengaruh. Dashboard mengirim header CSP yang menolak semua muatan dari
+alamat lain, sementara blok style/script inline tetap diizinkan. `/api/history`,
+`/api/export`, dan `/chart` bersifat publik dan hanya baca, seperti `/api/status`;
+ketiganya memakai `Cache-Control: no-store`.
 
 Grafik tidak ditautkan dari dashboard karena halaman utama sudah hampir penuh
 (8.175 dari 8.192 byte PROGMEM). Buka `http://smartlux.local/chart` langsung;
-URL juga dicetak di Serial saat boot. Grafik mengambil data dari `/api/history` tiap 2 detik.
+URL juga dicetak di Serial saat boot. Grafik mengambil `/api/history` dan
+`/api/status` tiap 2 detik, menampilkan lux BH1750 (atau estimasi LDR),
+penghematan beserta margin galat, serta kolom delay mati (5–200 s) dan pilihan
+frekuensi PWM yang disimpan lewat `/api/config`.
 
 ## 5. Tombol override
 
 - Tekan singkat (50–800 ms): `AUTO → NYALA → MATI → AUTO`.
 - Tekan lama (> 1500 ms): kembali ke `AUTO`.
 - Debounce 50 ms, tanpa `delay()`; mode manual tidak timeout.
-- `AUTO`: lampu nyala hanya jika **gelap DAN gerak**, mati 30 detik setelah
-  gerakan terakhir.
+- `AUTO`: lampu nyala hanya jika **gelap DAN gerak**, mati setelah masa tunda
+  (default 30 detik; dapat diubah 5–200 detik lewat `/chart` atau
+  `/api/config?delay=`, tersimpan di NVS).
+- **Sensor lux opsional**: bila BH1750 terdeteksi di I²C 0x23, firmware memakai
+  lux SI langsung (`lux_bh`, ambang `LUX_DARK_ON`/`LUX_BRIGHT_OFF` = 50/80 lx)
+  dan tetap membaca LDR sebagai cadangan/`light_pct`. Tanpa BH1750, logika
+  kembali ke ambang ADC seperti sebelumnya.
 - Peredupan dua tingkat: GPIO26 memakai PWM LEDC 1 kHz, 8 bit. Saat AUTO, duty
   255 (penuh) ketika gerakan baru saja terdeteksi, turun ke 128 (~50%) pada
   15 detik terakhir masa tunda, lalu 0 saat lampu mati. MANUAL ON selalu 255.
@@ -127,6 +137,12 @@ URL juga dicetak di Serial saat boot. Grafik mengambil data dari `/api/history` 
 6. **Peredupan** — amati transisi 255 → 128 → 0 pada masa tunda AUTO. Pastikan
    tidak ada kedip yang mengganggu dan catat hasilnya. Beberapa LED/driver
    dengan kontrol arus konstan tidak mendukung PWM.
+7. **BH1750 (opsional)** — bandingkan `lux_bh` dengan luxmeter/ponsel di titik
+   yang sama. BH1750 memiliki akurasi ±20%; sesuaikan `LUX_DARK_ON` dan
+   `LUX_BRIGHT_OFF` bila ruangan uji berbeda dari 50/80 lx. Sensor ini hanya
+   indikator lux, bukan alat ukur terkalibrasi.
+8. **Frekuensi PWM** — uji 100/500/1000/5000 Hz lewat `/chart`, catat frekuensi
+   yang tidak menimbulkan kedip/desis pada LED dan driver yang dipakai.
 
 ## 7. Format CSV pengukuran
 
@@ -223,11 +239,37 @@ yang berubah hanya cara membaca dan menelusuri status. Gunakan `GET /api/status`
 | Perangkat I²C (`oled_device`, `ina_device`) | `ok`, `missing` | Hasil deteksi saat boot; mode degraded tetap berjalan. |
 | Boot (`boot_phase`) | `init`, `i2c`, `net`, `ready` | Tahap inisialisasi sampai web server siap. |
 
-Kunci lama di `/api/status` dan empat endpoint awal tidak dihapus; sepuluh kunci
-status baru (`lamp_pwm` termasuk) ditambahkan di bagian akhir JSON. Kolom CSV
+Kunci lama di `/api/status` dan empat endpoint awal tidak dihapus; empat belas
+kunci tambahan (`lamp_pwm`, `lux_bh`, `delay_s`, `pwm_hz`, `savings_margin_pp`
+termasuk) ditambahkan di bagian akhir JSON. Kolom CSV
 `pwm` juga ditambahkan di akhir agar parser lama yang membaca 14 kolom pertama
 tetap bekerja.
 
 ## Autentikasi dashboard
 
 Aksi `/api/override` dan `/api/reset` memerlukan cookie `smartlux_auth`. Token berasal dari `SMARTLUX_TOKEN` di `secrets.h`, atau 12 digit heksadesimal MAC ESP32 yang dicetak ke Serial saat boot bersama URL pendaftaran. Buka `http://smartlux.local/?t=<token>` sekali untuk mendapat cookie `HttpOnly; SameSite=Strict; Path=/`. `/api/status` tetap publik untuk dashboard. Jika `secrets.h` tidak ada, token turunan MAC dapat dihitung oleh siapa pun di LAN — pakai hanya untuk demo pada jaringan lokal yang dipercaya. Token harus 1–64 karakter `[A-Za-z0-9_.-]`; karakter Base64 (`+`, `/`, `=`) ditolak.
+
+## 13. MQTT + Home Assistant discovery (opsional, R6)
+
+Telemetri MQTT dan auto-discovery Home Assistant **nonaktif secara default**. Keduanya hanya dikompilasi bila `SMARTLUX_ENABLE_MQTT` didefinisikan di `secrets.h` (lihat `secrets.example.h`). Tanpa define itu, firmware dasar tetap byte-for-byte sama seperti sebelumnya.
+
+```cpp
+// secrets.h (git-ignored)
+#define SMARTLUX_ENABLE_MQTT
+#define MQTT_BROKER "192.168.1.10"   // IP broker, BUKAN nama .local
+#define MQTT_PORT 1883                // opsional
+#define MQTT_USER "smartlux-r6"       // opsional, harus punya MQTT_PASS
+#define MQTT_PASS "sandi-akun-unik"   // opsional, jangan pakai token/OTA
+```
+
+`WiFiClient` ESP32 tidak menyelesaikan nama mDNS `.local`, jadi pakai alamat IP atau DNS yang bisa di-resolve router. Meski aktif, perangkat tetap berjalan normal bila broker mati: koneksi memakai backoff 5→10→20→30 detik tanpa `delay()` dan tidak mengganggu watchdog, pembacaan sensor, atau web server.
+
+| Topik | Isi | Retain |
+| ----- | --- | ------ |
+| `smartlux/<id>/state` | Salinan JSON `/api/status` (28 kunci) tiap 5 detik | tidak |
+| `smartlux/<id>/availability` | `online` saat connect, `offline` sebagai LWT | ya |
+| `homeassistant/<component>/smartlux_<id>/<obj>/config` | 9 entity discovery | ya |
+
+`<id>` = 6 digit heksadesimal dari 24 bit bawah MAC, dicetak di Serial saat boot. Sembilan entity bersifat **read-only**: gerakan (binary), iluminasi, lampu (binary), daya, energi, penghematan, mode (enum), override (derived), dan PWM (diagnostic). Tidak ada perintah MQTT yang mengubah lampu — kendali tetap lewat tombol dan dashboard.
+
+Broker sebaiknya lokal (VLAN IoT/lab), dengan akun berhak terbatas: `readwrite smartlux/<id>/#` dan `write homeassistant/+/smartlux_<id>/+/config`. Jangan pakai broker cloud untuk data okupansi kelas, jangan pakai ulang `SMARTLUX_TOKEN`/`SMARTLUX_OTA_PASS`, dan ingat bahwa kredensial ikut ter-compile ke `.bin` (dapat dibaca dengan `strings`). TLS sengaja ditunda karena perangkat tidak punya NTP; pakai hanya pada LAN tepercaya. Untuk verifikasi, build empat varian dengan `pio run -d firmware/SMARTLUX -e esp32dev[-mqtt|-ota|-mqtt-ota]` dan cek entity di Home Assistant → Settings → Devices → SMARTLUX `<id>`. Uji koneksi ke broker nyata tetap merupakan hardware gate.

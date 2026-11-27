@@ -59,6 +59,7 @@ pio run -d firmware/SMARTLUX
 | `tests/repo/proposal.test.js` | Struktur proposal: dua baris base64 PNG, heading BAB I–III, placeholder `[Isi]`, tabel markdown. |
 | `tests/repo/firmware.test.js` | Payload `INDEX_HTML` ≤ 8192 byte, tidak ada baris JS di kolom 0, pin map GPIO, route HTTP, `logic.h` tanpa Arduino header, status `secrets`. |
 | `tests/repo/hygiene.test.js` | `.gitignore` (secrets/env/build), tidak ada file `*.stl` ter-track, berkas wajib ada, `platform = native`. |
+| `tests/repo/mqtt.test.js` | Opt-in MQTT (R6): guard saat `SMARTLUX_ENABLE_MQTT` absen, `PubSubClient@2.8`, `setBufferSize(1536)`, `setConnectionTimeout(2000)`, LWT retained, 9 entitas discovery, 4 env CI di bawah 90% flash, dan kunci `value_json` selalu ada di `/api/status`. |
 
 ## Status
 

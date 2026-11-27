@@ -6,8 +6,10 @@
 #pragma once
 
 #include <math.h>
+#include <stdarg.h>
 #include <stddef.h>
 #include <stdint.h>
+#include <stdio.h>
 #include <string.h>
 
 // Dashboard auth token: SMARTLUX_TOKEN from secrets.h, or a 12-hex MAC fallback.
@@ -145,6 +147,46 @@ static inline int lampBrightness(bool lampOn, int mode, unsigned long nowMs,
   return (delayMs - elapsed) <= dimMs ? 128 : 255;
 }
 
+// --- Tier 1: BH1750 lux, runtime config, savings uncertainty -----------------
+
+// BH1750 H-resolution mode: lux = raw / 1.2 (datasheet).
+static inline float bh1750Lux(uint16_t raw) {
+  return (float)raw / 1.2f;
+}
+
+// Hysteresis on measured lux: -1 keep, 0 dark, 1 bright.
+static inline int lightDecisionLux(float lux, float darkOn, float brightOff) {
+  if (lux < darkOn) return 0;
+  if (lux > brightOff) return 1;
+  return -1;
+}
+
+static inline bool validDelaySeconds(int seconds) {
+  return seconds >= 5 && seconds <= 200;
+}
+
+static inline bool pwmFrequencyAllowed(int hz) {
+  return hz == 100 || hz == 500 || hz == 1000 || hz == 5000;
+}
+
+// Uncertainty of the savings percentage, in percentage points. Both the
+// measured lamp energy and the calculated always-on baseline carry relative
+// error; the ratio's error is their quadrature sum. Returns 0 when there is
+// no elapsed time or baseline yet.
+static inline double savingsMarginPct(double lampPowerW, double lampEnergyWh,
+                                      unsigned long elapsedMs,
+                                      double lampEnergyErrorPct,
+                                      double baselineErrorPct) {
+  const double baseline = lampPowerW * ((double)elapsedMs / 3600000.0);
+  if (baseline < 1e-6) return 0.0;
+  double frac = lampEnergyWh / baseline;
+  if (frac < 0.0) frac = 0.0;
+  if (frac > 1.0) frac = 1.0;
+  const double u = sqrt(lampEnergyErrorPct * lampEnergyErrorPct +
+                        baselineErrorPct * baselineErrorPct);
+  return frac * u;
+}
+
 // --- Dashboard token auth ----------------------------------------------------
 
 // Format a 48-bit MAC as 12 lowercase hex digits + NUL.
@@ -229,4 +271,175 @@ static inline bool findCookieValue(const char *header, const char *name,
     if (*p == ';') ++p;
   }
   return false;
+}
+
+// --- R6: MQTT + Home Assistant discovery (pure helpers) ----------------------
+// Tidak bergantung pada Arduino/WiFi/PubSubClient supaya bisa diuji di host.
+// Glue board (koneksi, publish, reconnect) ada di mqtt.h.
+
+static inline bool mqttConfigured(const char *broker) {
+  if (!broker || !*broker) return false;
+  return strcmp(broker, "GANTI_BROKER") != 0;
+}
+
+// Enam digit heksadesimal dari 24 bit bawah MAC. Empat digit punya ~0,7%
+// peluang tabrakan untuk 30 perangkat, jadi pakai enam.
+static inline bool mqttDeviceId(uint64_t mac, char *out, size_t n) {
+  if (!out || n < 7u) return false;
+  static const char kHex[] = "0123456789abcdef";
+  for (int i = 5; i >= 0; --i) {
+    out[i] = kHex[(unsigned)(mac & 0xFu)];
+    mac >>= 4;
+  }
+  out[6] = '\0';
+  return true;
+}
+
+enum MqttTopicKind {
+  SLX_TOPIC_BASE = 0,
+  SLX_TOPIC_STATE = 1,
+  SLX_TOPIC_AVAIL = 2,
+  SLX_TOPIC_DISCOVERY = 3,
+};
+
+// Prefix bisa dioverride lewat secrets.h; default sesuai rekomendasi HA.
+static inline bool mqttTopic(int kind, const char *id, const char *component,
+                             const char *object, char *out, size_t n,
+                             const char *baseTopic = "smartlux",
+                             const char *discoveryPrefix = "homeassistant") {
+  if (!id || !out || n == 0 || !baseTopic || !discoveryPrefix) return false;
+  int w;
+  switch (kind) {
+    case SLX_TOPIC_BASE:
+      w = snprintf(out, n, "%s/%s", baseTopic, id);
+      break;
+    case SLX_TOPIC_STATE:
+      w = snprintf(out, n, "%s/%s/state", baseTopic, id);
+      break;
+    case SLX_TOPIC_AVAIL:
+      w = snprintf(out, n, "%s/%s/availability", baseTopic, id);
+      break;
+    case SLX_TOPIC_DISCOVERY:
+      if (!component || !object) return false;
+      w = snprintf(out, n, "%s/%s/smartlux_%s/%s/config",
+                   discoveryPrefix, component, id, object);
+      break;
+    default:
+      return false;
+  }
+  return w > 0 && (size_t)w < n;
+}
+
+// millis() ESP32 32-bit. Pakai uint32_t (bukan unsigned long: 64-bit di host)
+// supaya perilaku rollover di tes host sama dengan di board.
+static inline bool mqttShouldAttempt(uint32_t nowMs, uint32_t lastMs,
+                                     uint32_t delayMs) {
+  return (nowMs - lastMs) >= delayMs;
+}
+
+// Backoff 5/5/10/20/30 s, dibatasi supaya shift tidak overflow.
+static inline uint32_t mqttNextBackoffMs(unsigned int attempt) {
+  if (attempt == 0) return 5000UL;
+  if (attempt >= 4) return 30000UL;
+  return 5000UL << (attempt - 1);
+}
+
+struct MqttEntity {
+  const char *component;
+  const char *object;
+  const char *name;
+  const char *valueTemplate;
+  const char *deviceClass;    // nullptr bila tidak ada
+  const char *stateClass;     // nullptr bila tidak ada
+  const char *unit;           // nullptr bila tidak ada
+  const char *icon;           // nullptr bila tidak ada
+  const char *entityCategory; // nullptr bila tidak ada
+  const char *options;        // array JSON, hanya untuk device_class enum
+  bool binary;
+};
+
+// Tabel static lokal fungsi: hanya di-emit di TU yang memanggilnya. Build dasar
+// (tanpa mqtt.h) tidak menyertakan rodata ini, jadi byte-for-byte tidak berubah.
+static inline const MqttEntity *mqttEntities(size_t *count) {
+  static const MqttEntity kEntities[] = {
+    {"binary_sensor", "motion", "Gerakan",
+     "{{ value_json.pir == 1 }}", "motion", nullptr, nullptr,
+     "mdi:motion-sensor", nullptr, nullptr, true},
+    {"sensor", "illuminance", "Iluminasi (estimasi)",
+     "{{ value_json.lux_est }}", "illuminance", nullptr, "lx",
+     "mdi:brightness-6", nullptr, nullptr, false},
+    {"binary_sensor", "lamp", "Lampu",
+     "{{ value_json.lamp == 1 }}", "light", nullptr, nullptr,
+     "mdi:lightbulb", nullptr, nullptr, true},
+    {"sensor", "power", "Daya",
+     "{{ value_json.power_mw / 1000 }}", "power", nullptr, "W",
+     "mdi:flash", nullptr, nullptr, false},
+    {"sensor", "energy", "Energi Sistem",
+     "{{ value_json.energy_wh }}", "energy", "total_increasing", "Wh",
+     "mdi:chart-line", nullptr, nullptr, false},
+    {"sensor", "savings", "Penghematan (vs selalu nyala)",
+     "{{ value_json.savings_pct }}", nullptr, nullptr, "%",
+     "mdi:leaf", nullptr, nullptr, false},
+    {"sensor", "mode", "Mode",
+     "{{ value_json.mode }}", "enum", nullptr, nullptr,
+     "mdi:auto-mode", nullptr, "[\"auto\",\"on\",\"off\"]", false},
+    {"binary_sensor", "override", "Override",
+     "{{ value_json.mode != 'auto' }}", nullptr, nullptr, nullptr,
+     "mdi:hand-back-right", nullptr, nullptr, true},
+    {"sensor", "pwm", "PWM Lampu",
+     "{{ value_json.lamp_pwm / 255 * 100 }}", nullptr, nullptr, "%",
+     "mdi:pulse", "diagnostic", nullptr, false},
+  };
+  if (count) *count = sizeof(kEntities) / sizeof(kEntities[0]);
+  return kEntities;
+}
+
+static inline bool slxAppendf(char *out, size_t n, size_t &pos,
+                              const char *fmt, ...) {
+  if (!out || !fmt || pos >= n) return false;
+  va_list ap;
+  va_start(ap, fmt);
+  const int w = vsnprintf(out + pos, n - pos, fmt, ap);
+  va_end(ap);
+  if (w < 0 || (size_t)w >= n - pos) return false;
+  pos += (size_t)w;
+  return true;
+}
+
+// Susun payload config discovery yang dibatasi `n`; -1 bila terpotong.
+static inline int buildMqttDiscoveryConfig(const MqttEntity *e, const char *id,
+                                           char *out, size_t n,
+                                           const char *baseTopic = "smartlux") {
+  if (!e || !id || !out || n == 0 || !baseTopic) return -1;
+  size_t pos = 0;
+  bool ok = slxAppendf(out, n, pos,
+      "{\"name\":\"%s\",\"unique_id\":\"smartlux_%s_%s\","
+      "\"~\":\"%s/%s\",\"state_topic\":\"~/state\","
+      "\"availability_topic\":\"~/availability\",\"expire_after\":60,"
+      "\"json_attributes_topic\":\"~/state\"",
+      e->name, id, e->object, baseTopic, id);
+  if (e->deviceClass)
+    ok = ok && slxAppendf(out, n, pos, ",\"device_class\":\"%s\"", e->deviceClass);
+  if (e->stateClass)
+    ok = ok && slxAppendf(out, n, pos, ",\"state_class\":\"%s\"", e->stateClass);
+  if (e->unit)
+    ok = ok && slxAppendf(out, n, pos, ",\"unit_of_measurement\":\"%s\"", e->unit);
+  if (e->icon)
+    ok = ok && slxAppendf(out, n, pos, ",\"icon\":\"%s\"", e->icon);
+  if (e->entityCategory)
+    ok = ok && slxAppendf(out, n, pos, ",\"entity_category\":\"%s\"", e->entityCategory);
+  if (e->options)
+    ok = ok && slxAppendf(out, n, pos, ",\"options\":%s", e->options);
+  if (e->binary)
+    ok = ok && slxAppendf(out, n, pos,
+                          ",\"payload_on\":\"True\",\"payload_off\":\"False\"");
+  ok = ok && slxAppendf(out, n, pos,
+      ",\"device\":{\"identifiers\":[\"smartlux_%s\"],"
+      "\"name\":\"SMARTLUX %s\",\"manufacturer\":\"SMAN CMBBS\","
+      "\"model\":\"ESP32 DevKit\",\"sw_version\":\"2.0\","
+      "\"configuration_url\":\"http://smartlux.local/\"},"
+      "\"origin\":{\"name\":\"SMARTLUX firmware\",\"sw\":\"2.0\","
+      "\"url\":\"https://github.com/FlintsXzzz/smartlux\"}}",
+      id, id);
+  return ok ? (int)pos : -1;
 }

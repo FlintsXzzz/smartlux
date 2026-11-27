@@ -8,7 +8,7 @@ dan proyek memakai [Semantic Versioning](https://semver.org/lang/id/).
 
 ### Added
 - Logika keputusan murni diekstrak ke `firmware/SMARTLUX/logic.h` dan diuji dengan
-  Unity di `tests/native/` (`pio test -d tests/native -e native`, 28/28 lulus);
+  Unity di `tests/native/` (`pio test -d tests/native -e native`, 33/33 lulus);
   CI menjalankan job `native-tests` terpisah.
 - `stableButtonState()` di `logic.h` mendebounce tombol override secara murni;
   `pollButton()` memakainya tanpa mengubah timing 50 ms. Empat tes baru
@@ -27,12 +27,35 @@ dan proyek memakai [Semantic Versioning](https://semver.org/lang/id/).
 - Energi (`energy_wh`, `lamp_energy_wh`, durasi, `P_lamp`) dipersistenkan di NVS
   tiap 60 detik dan dipulihkan saat boot; `/api/reset` menghapusnya.
 - Riwayat 60 sampel daya/duty dengan endpoint baru `GET /api/history` (JSON),
-  `GET /api/export` (CSV), dan halaman grafik `GET /chart` (PROGMEM, 2.092 byte).
+  `GET /api/export` (CSV), dan halaman grafik `GET /chart` (PROGMEM).
+- BH1750 opsional di I²C 0x23: bila terdeteksi, lux SI (`lux_bh`) menggantikan
+  estimasi LDR untuk histeresis (`lightDecisionLux()`, ambang 50/80 lx); tanpa
+  sensor, jalur ADC lama tetap dipakai. Lima helper murni baru di `logic.h`
+  (`bh1750Lux`, `lightDecisionLux`, `validDelaySeconds`, `pwmFrequencyAllowed`,
+  `savingsMarginPct`) ditulis RED-first; suite native kini 33/33.
+- Delay-off dapat diubah 5–200 detik saat berjalan lewat `GET /api/config` dan
+  halaman `/chart` (default 30 detik, tersimpan di NVS). Frekuensi PWM dapat
+  dipilih 100/500/1000/5000 Hz untuk eksperimen kedip LED.
+- `/api/status` menambah `lux_bh`, `delay_s`, `pwm_hz`, dan `savings_margin_pp`
+  (margin galat penghematan dari asumsi INA219 ±2% dan baseline ±5%); `/chart`
+  menampilkan lux, penghematan ± margin, label baseline terukur, serta kontrol
+  delay/PWM.
 - OTA via ArduinoOTA (port 8266) bersifat opt-in: hanya aktif dengan
   `SMARTLUX_OTA_PASS` minimal 8 karakter di `secrets.h`; tanpa itu OTA mati.
   Token dashboard turunan MAC tidak dipakai sebagai sandi OTA.
 - CI kini memeriksa anggaran PROGMEM untuk dua halaman (`INDEX_HTML` 8.192 byte,
-  `CHART_HTML` 2.560 byte) dan tetap menolak baris `function` di kolom pertama.
+  `CHART_HTML` 4.096 byte) dan tetap menolak baris `function` di kolom pertama.
+- MQTT + Home Assistant discovery (R6) bersifat opt-in lewat `SMARTLUX_ENABLE_MQTT`
+  di `secrets.h`. PubSubClient@2.8 dikunci, buffer 1536 byte, batas koneksi TCP
+  2000 ms memakai `setConnectionTimeout()`, LWT retained `offline`, sembilan
+  entity read-only dengan `unique_id` dari 6 hex MAC, telemetri JSON `/api/status`
+  tiap 5 detik, dan reconnect non-blocking dengan backoff 5–30 detik. Tanpa define,
+  firmware dasar tidak berubah.
+- `buildStatusJson()` diekstrak dari `handleStatus()` sehingga HTTP dan MQTT
+  memakai satu formatter JSON yang sama (28 kunci). CI membangun empat varian
+  (dasar, MQTT, OTA, MQTT+OTA) dengan batas 90% flash dan menjaga pertumbuhan
+  build dasar ≤100 byte. Sepuluh helper murni baru di `logic.h` ditulis RED-first;
+  suite native kini 43/43 dan tes repo 31/31.
 
 ### Fixed
 - `luxEstimate()` kini meng-clamp ADC ke 0..4095 seperti `lightPercent()`, sehingga

@@ -179,6 +179,52 @@ void test_brightness_motion_resets_timer(void) {
   TEST_ASSERT_EQUAL_INT(255, lampBrightness(true, 0, 26000UL, 25000UL, 30000UL, 15000UL));
 }
 
+// --- Tier 1 closed-source adoption: BH1750, runtime config, savings margin ---
+
+void test_bh1750_lux(void) {
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 0.0f, bh1750Lux(0));
+  TEST_ASSERT_FLOAT_WITHIN(0.01f, 100.0f, bh1750Lux(120));
+  TEST_ASSERT_FLOAT_WITHIN(0.5f, 54612.5f, bh1750Lux(65535));
+}
+
+void test_light_decision_lux(void) {
+  // < darkOn = gelap, > brightOff = terang, di antaranya pertahankan.
+  TEST_ASSERT_EQUAL_INT(0, lightDecisionLux(30.0f, 50.0f, 80.0f));
+  TEST_ASSERT_EQUAL_INT(-1, lightDecisionLux(60.0f, 50.0f, 80.0f));
+  TEST_ASSERT_EQUAL_INT(1, lightDecisionLux(90.0f, 50.0f, 80.0f));
+  TEST_ASSERT_EQUAL_INT(-1, lightDecisionLux(50.0f, 50.0f, 80.0f));
+  TEST_ASSERT_EQUAL_INT(1, lightDecisionLux(80.1f, 50.0f, 80.0f));
+}
+
+void test_valid_delay_seconds(void) {
+  TEST_ASSERT_FALSE(validDelaySeconds(4));
+  TEST_ASSERT_TRUE(validDelaySeconds(5));
+  TEST_ASSERT_TRUE(validDelaySeconds(30));
+  TEST_ASSERT_TRUE(validDelaySeconds(200));
+  TEST_ASSERT_FALSE(validDelaySeconds(201));
+}
+
+void test_pwm_frequency_allowed(void) {
+  TEST_ASSERT_TRUE(pwmFrequencyAllowed(100));
+  TEST_ASSERT_TRUE(pwmFrequencyAllowed(500));
+  TEST_ASSERT_TRUE(pwmFrequencyAllowed(1000));
+  TEST_ASSERT_TRUE(pwmFrequencyAllowed(5000));
+  TEST_ASSERT_FALSE(pwmFrequencyAllowed(60));
+  TEST_ASSERT_FALSE(pwmFrequencyAllowed(2000));
+  TEST_ASSERT_FALSE(pwmFrequencyAllowed(4000));
+  TEST_ASSERT_FALSE(pwmFrequencyAllowed(0));
+}
+
+void test_savings_margin(void) {
+  // Baseline 3 W selama 1 jam = 3 Wh; terukur 1,8 Wh -> hemat 40%.
+  // sqrt(2^2 + 5^2) = 5,385 -> margin = 0,6 * 5,385 = 3,231 poin persen.
+  TEST_ASSERT_FLOAT_WITHIN(0.01, 3.23, savingsMarginPct(3.0, 1.8, 3600000UL, 2.0, 5.0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.0, savingsMarginPct(3.0, 0.0, 0, 2.0, 5.0));
+  TEST_ASSERT_FLOAT_WITHIN(0.001, 0.0, savingsMarginPct(0.0, 0.0, 3600000UL, 2.0, 5.0));
+  // Energi di atas baseline: fraksi dibatasi 1 -> margin penuh 5,385 pp.
+  TEST_ASSERT_FLOAT_WITHIN(0.01, 5.39, savingsMarginPct(3.0, 9.0, 3600000UL, 2.0, 5.0));
+}
+
 // --- dashboard auth helpers -------------------------------------------------
 void test_format_mac_token(void) {
   char out[16];
@@ -222,6 +268,127 @@ void test_find_cookie_value(void) {
   TEST_ASSERT_FALSE(findCookieValue("foo=1", "smartlux_auth", out, sizeof(out)));
 }
 
+// --- R6 MQTT helpers (pure, host-testable) ---------------------------------
+void test_mqtt_configured(void) {
+  TEST_ASSERT_FALSE(mqttConfigured(nullptr));
+  TEST_ASSERT_FALSE(mqttConfigured(""));
+  TEST_ASSERT_FALSE(mqttConfigured("GANTI_BROKER"));
+  TEST_ASSERT_TRUE(mqttConfigured("192.0.2.10"));
+  TEST_ASSERT_TRUE(mqttConfigured("broker.iot.lan"));
+}
+
+void test_mqtt_device_id(void) {
+  char out[8];
+  TEST_ASSERT_TRUE(mqttDeviceId(0xAABBCCDDEEFFULL, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ddeeff", out);   // low 24 bits, not the full MAC
+  TEST_ASSERT_TRUE(mqttDeviceId(0ULL, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("000000", out);
+  TEST_ASSERT_TRUE(mqttDeviceId(0xFFFFFFFFFFFFFFFFULL, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("ffffff", out);
+  TEST_ASSERT_FALSE(mqttDeviceId(0xAABBCCDDEEFFULL, out, 6));  // no room for NUL
+}
+
+void test_mqtt_topic(void) {
+  char out[128];
+  TEST_ASSERT_TRUE(mqttTopic(SLX_TOPIC_BASE, "ccddee", nullptr, nullptr, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("smartlux/ccddee", out);
+  TEST_ASSERT_TRUE(mqttTopic(SLX_TOPIC_STATE, "ccddee", nullptr, nullptr, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("smartlux/ccddee/state", out);
+  TEST_ASSERT_TRUE(mqttTopic(SLX_TOPIC_AVAIL, "ccddee", nullptr, nullptr, out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("smartlux/ccddee/availability", out);
+  TEST_ASSERT_TRUE(mqttTopic(SLX_TOPIC_DISCOVERY, "ccddee", "sensor", "power", out, sizeof(out)));
+  TEST_ASSERT_EQUAL_STRING("homeassistant/sensor/smartlux_ccddee/power/config", out);
+  TEST_ASSERT_FALSE(mqttTopic(SLX_TOPIC_DISCOVERY, "ccddee", "sensor", "power", out, 8));
+}
+
+void test_mqtt_should_attempt(void) {
+  TEST_ASSERT_TRUE(mqttShouldAttempt(1000UL, 0UL, 500UL));
+  TEST_ASSERT_FALSE(mqttShouldAttempt(1000UL, 600UL, 500UL));
+  TEST_ASSERT_TRUE(mqttShouldAttempt(1000UL, 500UL, 500UL));
+  // millis() rollover: now=100, last=4294967000 -> elapsed=396 ms.
+  TEST_ASSERT_FALSE(mqttShouldAttempt(100UL, 4294967000UL, 500UL));
+  TEST_ASSERT_TRUE(mqttShouldAttempt(100UL, 4294967000UL, 300UL));
+}
+
+void test_mqtt_backoff(void) {
+  TEST_ASSERT_EQUAL_UINT32(5000UL, mqttNextBackoffMs(0));
+  TEST_ASSERT_EQUAL_UINT32(5000UL, mqttNextBackoffMs(1));
+  TEST_ASSERT_EQUAL_UINT32(10000UL, mqttNextBackoffMs(2));
+  TEST_ASSERT_EQUAL_UINT32(20000UL, mqttNextBackoffMs(3));
+  TEST_ASSERT_EQUAL_UINT32(30000UL, mqttNextBackoffMs(4));
+  TEST_ASSERT_EQUAL_UINT32(30000UL, mqttNextBackoffMs(99));  // capped, no overflow
+}
+
+void test_mqtt_entity_table(void) {
+  size_t count = 0;
+  const MqttEntity *e = mqttEntities(&count);
+  TEST_ASSERT_NOT_NULL(e);
+  TEST_ASSERT_EQUAL_size_t(9u, count);
+  int sensors = 0, binary = 0;
+  for (size_t i = 0; i < count; ++i) {
+    TEST_ASSERT_NOT_NULL(e[i].component);
+    TEST_ASSERT_NOT_NULL(e[i].object);
+    TEST_ASSERT_NOT_NULL(e[i].name);
+    TEST_ASSERT_NOT_NULL(e[i].valueTemplate);
+    if (!strcmp(e[i].component, "sensor")) ++sensors;
+    if (!strcmp(e[i].component, "binary_sensor")) ++binary;
+    for (size_t j = i + 1; j < count; ++j)
+      TEST_ASSERT_FALSE_MESSAGE(strcmp(e[i].object, e[j].object) == 0,
+                                "MQTT entity object ids must be unique");
+  }
+  TEST_ASSERT_EQUAL_INT(6, sensors);
+  TEST_ASSERT_EQUAL_INT(3, binary);
+}
+
+void test_mqtt_discovery_config(void) {
+  char out[1200];
+  TEST_ASSERT_EQUAL_INT(-1, buildMqttDiscoveryConfig(nullptr, "ccddee", out, sizeof(out)));
+  const MqttEntity *e = mqttEntities(nullptr);
+  const int n = buildMqttDiscoveryConfig(&e[0], "ccddee", out, sizeof(out));
+  TEST_ASSERT_GREATER_THAN_INT(0, n);
+  out[n] = '\0';
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"unique_id\":\"smartlux_ccddee_motion\""));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"~\":\"smartlux/ccddee\""));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"state_topic\":\"~/state\""));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"availability_topic\":\"~/availability\""));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"expire_after\":60"));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"device\":{"));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"origin\":{"));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"payload_on\":\"True\""));
+  TEST_ASSERT_NOT_NULL(strstr(out, "\"json_attributes_topic\":\"~/state\""));
+}
+
+void test_mqtt_discovery_config_truncation(void) {
+  char small[64];
+  const MqttEntity *e = mqttEntities(nullptr);
+  TEST_ASSERT_EQUAL_INT(-1, buildMqttDiscoveryConfig(&e[0], "ccddee", small, sizeof(small)));
+}
+
+void test_mqtt_discovery_mode_enum(void) {
+  char out[1200];
+  size_t count = 0;
+  const MqttEntity *e = mqttEntities(&count);
+  for (size_t i = 0; i < count; ++i) {
+    if (!strcmp(e[i].object, "mode")) {
+      const int n = buildMqttDiscoveryConfig(&e[i], "ccddee", out, sizeof(out));
+      TEST_ASSERT_GREATER_THAN_INT(0, n);
+      out[n] = '\0';
+      TEST_ASSERT_NOT_NULL(strstr(out, "\"device_class\":\"enum\""));
+      TEST_ASSERT_NOT_NULL(strstr(out, "\"options\":[\"auto\",\"on\",\"off\"]"));
+      return;
+    }
+  }
+  TEST_FAIL_MESSAGE("mode entity not found");
+}
+
+void test_mqtt_templates_reference_status(void) {
+  size_t count = 0;
+  const MqttEntity *e = mqttEntities(&count);
+  for (size_t i = 0; i < count; ++i)
+    TEST_ASSERT_NOT_NULL_MESSAGE(strstr(e[i].valueTemplate, "value_json."),
+                                 "every entity template must read /api/status JSON");
+}
+
 int main(int, char **) {
   UNITY_BEGIN();
   RUN_TEST(test_warmup_forces_off);
@@ -244,6 +411,11 @@ int main(int, char **) {
   RUN_TEST(test_brightness_manual_on_full);
   RUN_TEST(test_brightness_auto_levels);
   RUN_TEST(test_brightness_motion_resets_timer);
+  RUN_TEST(test_bh1750_lux);
+  RUN_TEST(test_light_decision_lux);
+  RUN_TEST(test_valid_delay_seconds);
+  RUN_TEST(test_pwm_frequency_allowed);
+  RUN_TEST(test_savings_margin);
   RUN_TEST(test_button_debounce_press_edge);
   RUN_TEST(test_button_debounce_release_edge);
   RUN_TEST(test_button_debounce_bounce_rejected);
@@ -252,5 +424,15 @@ int main(int, char **) {
   RUN_TEST(test_token_equals);
   RUN_TEST(test_valid_cookie_value);
   RUN_TEST(test_find_cookie_value);
+  RUN_TEST(test_mqtt_configured);
+  RUN_TEST(test_mqtt_device_id);
+  RUN_TEST(test_mqtt_topic);
+  RUN_TEST(test_mqtt_should_attempt);
+  RUN_TEST(test_mqtt_backoff);
+  RUN_TEST(test_mqtt_entity_table);
+  RUN_TEST(test_mqtt_discovery_config);
+  RUN_TEST(test_mqtt_discovery_config_truncation);
+  RUN_TEST(test_mqtt_discovery_mode_enum);
+  RUN_TEST(test_mqtt_templates_reference_status);
   return UNITY_END();
 }

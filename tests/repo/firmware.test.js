@@ -68,12 +68,13 @@ test('dashboard HTTP routes are registered on the server', () => {
   const routes = [
     ...src.matchAll(/server\.on\("([^"]+)", HTTP_GET, (\w+)\);/g),
   ].map((m) => m[1]);
-  // The four original routes are the stable public API; the history/export/chart
-  // routes were added later for the R4 energy-history feature.
+  // The four original routes are the stable public API; history/export/chart
+  // and the runtime config endpoint were added later.
   assert.deepEqual(
     [...routes].sort(),
     [
       '/',
+      '/api/config',
       '/api/export',
       '/api/history',
       '/api/override',

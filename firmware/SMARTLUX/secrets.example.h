@@ -38,3 +38,25 @@
 // dashboard turunan MAC tidak dipakai karena mudah dihitung orang di LAN.
 // Pakai sandi unik yang kuat dan jangan di-commit.
 // #define SMARTLUX_OTA_PASS "ganti-sandi-ota-panjang"
+
+// MQTT + Home Assistant discovery (opt-in, R6). Kopi blok di bawah ke secrets.h
+// lalu isi alamat broker. Tanpa SMARTLUX_ENABLE_MQTT, kode MQTT tidak dikompilasi
+// sama sekali: firmware dasar tetap byte-for-byte seperti sebelumnya.
+//
+// WiFiClient ESP32 TIDAK menyelesaikan nama ".local" mDNS. Pakai alamat IP
+// broker di VLAN tepercaya/IoT atau nama DNS yang bisa di-resolve router.
+// Broker hanya lokal — JANGAN pakai broker cloud untuk data okupansi kelas.
+// #define SMARTLUX_ENABLE_MQTT
+// #define MQTT_BROKER "192.168.1.10"
+// #define MQTT_PORT 1883                       // opsional, default 1883
+// #define MQTT_USER "smartlux-r6"             // opsional; harus punya MQTT_PASS
+// #define MQTT_PASS "sandi-akun-broker-unik"  // opsional; jangan pakai token/OTA
+// #define MQTT_BASE_TOPIC "smartlux"          // opsional, default smartlux
+// #define MQTT_DISCOVERY_PREFIX "homeassistant" // opsional, default homeassistant
+//
+// Akun broker sebaiknya haknya terbatas (ACL per perangkat):
+//   readwrite smartlux/<id>/#
+//   write homeassistant/+/smartlux_<id>/+/#
+// "<id>" = 6 digit heksadesimal dari 24 bit bawah MAC, dicetak di Serial saat boot.
+// Sandi ini ikut ter-compile ke .bin (bisa dibaca dengan strings); ganti saat
+// perangkat dipensiunkan. Jangan pakai SMARTLUX_TOKEN atau SMARTLUX_OTA_PASS.

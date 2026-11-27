@@ -260,6 +260,14 @@ Dashboard web lokal dibuat dengan WebServer pada ESP32 dan diakses melalui brows
 
 Sebagai pelengkap, firmware menyimpan 60 sampel terakhir daya dan nilai duty lampu di memori. Endpoint `/api/history` mengembalikan sampel tersebut dalam bentuk JSON, `/api/export` mengunduhnya sebagai CSV, dan halaman `/chart` menampilkan grafik daya (W) serta duty lampu (%) tanpa pustaka dari internet. Karena halaman utama sudah hampir penuh di PROGMEM, grafik disajikan pada halaman tersendiri dan diakses langsung melalui alamat `http://smartlux.local/chart`. Akumulasi energi (`energy_wh`, energi lampu, durasi, dan daya lampu hasil kalibrasi) juga dipersistenkan dalam memori non-volatile (NVS) ESP32 tiap 60 detik, sehingga tidak hilang saat perangkat mati; tombol reset pada dashboard mengosongkan nilai tersebut.
 
+Waktu tunda dan frekuensi PWM dapat diubah tanpa memprogram ulang ESP32 melalui halaman `/chart`. Endpoint `GET /api/config` tanpa parameter bersifat publik dan hanya melaporkan nilai yang sedang dipakai (`delay_s`, `pwm_hz`, dan status sensor BH1750), sedangkan permintaan dengan parameter `delay` (5–200 detik) atau `pwm` (100, 500, 1000, atau 5000 Hz) wajib menyertakan cookie token yang sama dengan endpoint kendali lainnya, divalidasi lebih dahulu, lalu disimpan di NVS agar bertahan setelah daya diputus. Nilai di luar rentang ditolak dengan kode 400, bukan diterima sebagai nilai terdekat.
+
+Penghematan energi dilaporkan bersama ketidakpastiannya. Karena pembanding "lampu menyala terus" dihitung dari daya lampu terukur dikalikan durasi (bukan pengukuran langsung), angka penghematan ditulis sebagai nilai ± margin, dengan margin gabungan dari asumsi akurasi INA219 sekitar ±2% dan ketidakpastian baseline sekitar ±5%. Dashboard dan halaman grafik memberi label bahwa baseline tersebut dihitung, bukan diukur, sehingga pembaca tidak menyalahartikannya sebagai hasil pengukuran langsung.
+
+Sebagai alternatif pengganti LDR, sensor BH1750 (opsional, I²C alamat 0x23) mengukur iluminansi langsung dalam satuan lux dengan rentang 1–65.535 lux. Firmware mendeteksi modul ini saat awal dan otomatis kembali ke pembagi tegangan LDR bila modul tidak ditemukan, sehingga rangkaian dasar tetap berfungsi tanpa tambahan komponen. Dengan BH1750, ambang dinyatakan dalam lux (50 lux untuk gelap dan 80 lux untuk terang, dengan histeresis di antaranya), sehingga hasilnya dapat dibandingkan langsung dengan acuan SNI 6197:2020 yang menetapkan sekitar 350 lux untuk ruang kelas. Ketidakpastian sensor sekitar ±20% tetap dicatat, dan nilai ambang tetap harus diverifikasi di lokasi prototipe.
+
+Integrasi ke sistem otomasi rumah dapat dilakukan lewat protokol MQTT ke broker lokal. Fitur ini bersifat opsional dan hanya dikompilasi bila `SMARTLUX_ENABLE_MQTT` diisi pada `secrets.h`; tanpa itu firmware dasar tidak berubah. Saat aktif, perangkat mengirim salinan JSON `/api/status` ke topik `smartlux/<id>/state` setiap 5 detik dan mendaftarkan sembilan entitas pembacaan ke Home Assistant melalui topik discovery `homeassistant/<component>/smartlux_<id>/<obj>/config`. Identitas perangkat memakai enam digit heksadesimal akhir MAC sehingga tidak ada dua board yang saling menimpa. Pesan `offline` disiapkan sebagai *last will and testament* dan dikirim broker bila perangkat putus. Koneksi memakai backoff 5–30 detik tanpa `delay()`, sehingga tidak mengganggu watchdog maupun pembacaan sensor. Seluruh entitas bersifat pembacaan saja: tidak ada topik MQTT yang dapat menyalakan atau mematikan lampu, dan kredensial broker tidak boleh memakai token dashboard maupun kata sandi OTA. Karena `WiFiClient` ESP32 tidak menyelesaikan nama `.local`, alamat broker harus ditulis sebagai IP atau nama DNS yang dapat di-resolve router.
+
 ## **2.7 Spesifikasi Komponen Utama**
 
 | **Komponen**   | **Spesifikasi / karakteristik yang digunakan**                                                                                               | **Pemeriksaan sebelum perakitan**                                                                                                             |
@@ -293,7 +301,7 @@ Sistem memiliki tiga mode yang ditampilkan pada OLED dan dashboard:
 
 | **Mode** | **Perilaku lampu** | **Cara masuk** |
 | -------- | ------------------ | -------------- |
-| AUTO | Mengikuti kondisi gelap DAN gerakan, dengan waktu tunda 30 detik | Tekan tombol singkat dari MANUAL_OFF, atau tombol AUTO pada dashboard |
+| AUTO | Mengikuti kondisi gelap DAN gerakan, dengan waktu tunda yang dapat diatur 5–200 detik (bawaan 30 detik) | Tekan tombol singkat dari MANUAL_OFF, atau tombol AUTO pada dashboard |
 | MANUAL ON | Lampu selalu menyala tanpa menunggu sensor | Tekan tombol singkat dari AUTO, atau tombol ON pada dashboard |
 | MANUAL OFF | Lampu selalu mati tanpa memedulikan sensor | Tekan tombol singkat dari MANUAL_ON, atau tombol OFF pada dashboard |
 
@@ -302,6 +310,8 @@ Tombol override dihubungkan ke GPIO32 dengan konfigurasi INPUT_PULLUP; menekan t
 Pada mode AUTO, lampu tidak hanya menyala atau mati. Firmware memakai PWM LEDC pada GPIO26 dengan frekuensi 1 kHz dan resolusi 8 bit: duty 255 (penuh) saat gerakan terdeteksi, diturunkan ke 128 (sekitar 50%) pada 15 detik terakhir masa tunda, lalu 0 saat tunda berakhir. Peredupan dua tingkat ini bertujuan mengurangi daya menjelang lampu mati sekaligus memberi tanda visual kepada pengguna. Rangkaian resistor gate 220–470 Ω dan pull-down 10 kΩ tetap kompatibel pada frekuensi ini. Karena tidak semua modul LED mendukung PWM (terutama LED dengan driver arus konstan), pengaruh peredupan harus diuji dan dicatat secara empiris pada laporan akhir; hasil perhitungan energi tetap memakai daya yang diukur INA219, bukan daya nominal.
 
 Kestabilan pembacaan ditingkatkan dengan filter median lima sampel berturut-turut pada ADC LDR, sehingga satu pembacaan menyimpang tidak langsung mengubah keputusan lampu. Firmware juga memantau task watchdog ESP32 dan melakukan inisialisasi ulang bus I²C bila OLED atau INA219 berhenti merespons tiga kali berturut-turut; OLED hanya diinisialisasi ulang bila memang sebelumnya aktif. Pembaruan firmware lewat jaringan (OTA) tersedia sebagai fitur opsional yang hanya aktif apabila kata sandi khusus minimal delapan karakter diisi pada `secrets.h`; tanpa itu fitur OTA dinonaktifkan demi keamanan.
+
+Integrasi ke sistem rumah cerdas disediakan sebagai opsi kompilasi, bukan fitur bawaan. Dengan menambahkan `-DSMARTLUX_ENABLE_MQTT` dan alamat broker, firmware mengaktifkan klien MQTT kecil yang memublikasikan sembilan entitas (gerakan, status lampu, mode, daya, energi, penghematan, dan duty) serta mengumumkannya ke Home Assistant melalui topik discovery yang bersifat retained. Karena fitur ini menambah sekitar 15–20 KB flash dan memperbesar kebutuhan RAM, build bawaan tetap tanpa MQTT; setiap kombinasi opsi (dasar, MQTT, OTA, MQTT+OTA) diuji kompilasinya pada CI agar tetap di bawah batas flash. Broker, kredensial, dan kata sandi OTA tidak pernah ditulis di dalam kode sumber, melainkan pada `secrets.h` yang tidak diunggah ke repositori. Pengiriman telemetri MQTT dan pendaftaran otomatis ke Home Assistant mengikuti pola opt-in yang sama: keduanya hanya aktif bila `SMARTLUX_ENABLE_MQTT` dan alamat broker lokal diisi pada `secrets.h`. Formatter JSON `/api/status` diekstrak menjadi satu fungsi bersama yang dipakai baik oleh dashboard maupun MQTT, agar kedua jalur selalu menampilkan kunci dan nilai yang identik.
 
 **BAB III  
 METODE PERANCANGAN DAN PEMBUATAN**
@@ -344,6 +354,7 @@ Penelitian ini merupakan eksperimen kuantitatif yang didahului kegiatan rancang 
 | 19      | Kabel I²C dan konektor tambahan            | 1 set      | Menghubungkan OLED dan INA219 ke bus I²C                           |
 | 20      | Filamen PETG/PLA dan sekrup M3             | 1 set      | Casing cetak 3D, dudukan modul, dan penutup                         |
 | 21      | PCB lubang / board kecil (opsional)        | 1 buah     | Merapikan sambungan di dalam casing                                |
+| 22      | Modul sensor BH1750 (opsional)             | 1 modul    | Mengukur iluminansi langsung dalam lux (I²C 0x23) sebagai pengganti LDR |
 
 Catatan: multimeter dan komputer/laptop diutamakan meminjam fasilitas laboratorium atau milik anggota sehingga tidak perlu dibeli. Lampu yang digunakan sebaiknya berupa modul LED 5 V yang telah memiliki pembatas arus. Jika menggunakan LED tunggal, wajib dipasang resistor pembatas arus yang sesuai. Untuk mengukur daya secara andal disarankan dua multimeter (satu untuk tegangan, satu untuk arus) atau modul INA219; satu multimeter saja tidak dapat mengukur keduanya secara bersamaan. Daya nominal modul LED harus diketahui sebelum pengujian agar dapat dinilai apakah penghematan mungkin terjadi. OLED, INA219, dan tombol override merupakan komponen tambahan untuk fitur pemantauan dan kendali manual; kabel I²C dibuat sependek mungkin agar bus stabil.
 
@@ -523,6 +534,10 @@ Agar perbandingan adil, mode konvensional harus memakai lampu yang sama jenis, d
 
 5\. Apabila OTA diaktifkan dengan kata sandi yang benar, lakukan satu percobaan unggah firmware dan catat keberhasilan. Tanpa kata sandi, pastikan OTA benar-benar tidak merespons.
 
+6\. Buka `/chart`, ubah waktu tunda menjadi 10 detik lalu simpan. Pastikan respons `{"ok":1}`, nilai `delay_s` pada `/api/status` berubah, dan masa tunda benar-benar memendek saat diuji. Ulangi dengan nilai 4 detik dan pastikan permintaan ditolak (kode 400) tanpa mengubah nilai yang tersimpan. Ulangi setelah daya diputus untuk membuktikan nilai tersimpan di NVS.
+
+7\. Ubah frekuensi PWM dari 1000 Hz ke 100 Hz dan 5000 Hz, lalu amati `lamp_pwm` serta perilaku cahaya lampu pada setiap frekuensi. Catat apakah muncul kedip, bunyi, atau penurunan terang, dan gunakan data ini untuk memilih frekuensi akhir. Bila modul BH1750 tersedia, pasang modul lalu bandingkan `lux_bh` dengan `lux_est`; tanpa modul, pastikan firmware tetap memakai LDR dan `lux_bh` bernilai nol.
+
 ## **3.8 Teknik Pengukuran dan Analisis Data**
 
 Pengukuran dilakukan dengan multimeter digital. Untuk mengukur tegangan, multimeter diatur pada mode volt DC dan dipasang paralel terhadap titik yang diukur. Untuk mengukur arus, multimeter diatur pada mode ampere DC dan dipasang seri pada jalur beban. Untuk mengukur hambatan, rangkaian harus tidak diberi daya dan komponen yang diukur sebaiknya dilepaskan dari jalur paralel yang dapat memengaruhi hasil.
@@ -538,6 +553,8 @@ Energi SMARTLUX sebaiknya didekomposisi menjadi tiga keadaan daya agar sesuai de
 **E_SmartLUX = P_quiescent × t_off + P_active × t_on + P_intermediate × t_delay**
 
 dengan P_quiescent adalah daya saat LED mati (ESP32 + PIR), P_active saat LED menyala, dan P_intermediate saat periode tunda, masing-masing dikali durasi yang tercatat. Sebelum uji penuh, ukur ketiga nilai daya tersebut serta P_konvensional, lalu verifikasi bahwa P_konvensional > P_quiescent.
+
+Angka penghematan selalu dilaporkan sebagai nilai ± margin, bukan angka tunggal. Margin gabungan dihitung dari asumsi akurasi pengukuran daya sekitar ±2% (spesifikasi INA219 dan toleransi shunt) dan ketidakpastian baseline sekitar ±5% (daya lampu terukur dikalikan durasi pemakaian), lalu dikalikan dengan fraksi penghematan yang diperoleh. Baseline "lampu menyala terus" karena itu diberi label sebagai nilai terhitung, sedangkan daya lampu dan energi SMARTLUX adalah hasil pengukuran langsung. Perbedaan istilah ini penting: laporan komersial sering menyebut penghematan dari perkiraan daya nominal, sementara penelitian ini mengukur dayanya. Sebagai pembanding literatur, meta-analisis LBNL melaporkan rata-rata penghematan 24% untuk kendali okupansi saja dan 38% bila digabung dengan pemanfaatan cahaya alami, dengan angka yang lebih tinggi pada bangunan pendidikan. Hasil penelitian ini dibandingkan dengan rentang tersebut, bukan dengan klaim pemasaran "hingga 75%" dari satu studi kasus gedung. Acuan SNI 6197:2020 dipakai untuk menunjukkan bahwa kendali okupansi dan pencahayaan memang diakui sebagai strategi konservasi energi, sedangkan tarif PLN sekitar Rp1.700/kWh dipakai untuk menerjemahkan penghematan energi menjadi perkiraan rupiah.
 
 Validasi pembacaan INA219 dilakukan dengan membandingkan tegangan dan arus yang ditampilkan OLED/dashboard terhadap multimeter pada tiga titik: LED mati, LED menyala, dan saat tunda. Selisih tegangan diharapkan kecil (beberapa puluh mV), sedangkan selisih arus dapat berasal dari toleransi shunt 1–2% dan offset modul. Jika selisih arus melebihi 5%, lakukan kalibrasi offset pada firmware atau ganti modul.
 
@@ -683,6 +700,18 @@ Adafruit Industries. (2024). "Monochrome OLED Breakouts." Adafruit Learning Syst
 
 Texas Instruments. (2015). "INA219 Zero-Drift, Bidirectional Current/Power Monitor With I²C Interface." <https://www.ti.com/lit/ds/symlink/ina219.pdf> (diakses 20 November 2026).
 
+ROHM Semiconductor. (tanpa tahun). "BH1750FVI: Digital 16-bit Serial Output Type Ambient Light Sensor IC." Datasheet, ROHM Co., Ltd. <https://www.rohm.com/products/sensors-mems/ambient-light-sensors/bh1750fvi-product> (diakses 24 November 2026).
+
+Badan Standardisasi Nasional. (2020). "SNI 6197:2020 Konservasi Energi pada Sistem Pencahayaan." <https://iai-jatim.com/wp-content/uploads/2023/11/SNI-6197_2020-Konservasi-Energi-Pada-Sistem-Pencahayaan.pdf> (diakses 24 November 2026).
+
+Lawrence Berkeley National Laboratory. (2011). "A Meta-Analysis of Energy Savings from Lighting Controls in Commercial Buildings" (LBNL-5095E). <https://eta-publications.lbl.gov/sites/default/files/a_meta-analysis_of_energy_savings_from_lighting_controls_in_commercial_buildings.pdf> (diakses 24 November 2026).
+
+Lighting Controls Academy. (tanpa tahun). "LBNL Estimates Average Energy Savings for Popular Lighting Control Strategies." <https://lightingcontrolsacademy.org/lbnl-estimates-average-energy-savings-for-popular-lighting-control-strategies> (diakses 24 November 2026).
+
+HueCommand. (tanpa tahun). "Philips Hue Energy Use: Estimated kWh Dashboard." <https://huecommand.com/hue-energy-tracking> (diakses 24 November 2026).
+
+CNBC Indonesia. (2026). "Resmi! Daftar Tarif Listrik PLN per kWh, Berlaku Hingga Desember 2026." <https://cnbcindonesia.com/news/20261102103438-4-781436/resmi-daftar-tarif-listrik-pln-per-kwh-berlaku-hingga-desember-2026> (diakses 24 November 2026).
+
 Espressif Systems. (tanpa tahun). "WebServer — Arduino ESP32 Documentation." <https://docs.espressif.com/projects/arduino-esp32/en/latest/api/webserver.html> (diakses 20 November 2026).
 
 Espressif Systems. (tanpa tahun). "WiFi — Arduino ESP32 Documentation." <https://docs.espressif.com/projects/arduino-esp32/en/latest/api/wifi.html> (diakses 20 November 2026).
@@ -774,6 +803,21 @@ Cara pengisian: ukur V dan I secara terpisah untuk setiap keadaan (konvensional;
 | 3       | Ekspor CSV | Unduh `/api/export` | Baris `t_s,mw,pwm` sesuai grafik |            |
 | 4       | Persistensi NVS | Putus dan sambung daya, lalu `/api/reset` | Energi kembali, lalu nol setelah reset |      |
 | 5       | OTA | Isi kata sandi ≥8 karakter di `secrets.h`, lalu unggah | OTA berhasil; tanpa kata sandi OTA mati |    |
+| 6       | Konfigurasi tunda | Ubah `delay` lewat `/chart` (10 detik, lalu 4 detik) | 10 tersimpan dan berlaku; 4 ditolak kode 400 |    |
+| 7       | Frekuensi PWM | Pilih 100 / 1000 / 5000 Hz, amati `lamp_pwm` dan cahaya | Nilai berubah; kedip/bunyi dicatat bila ada |    |
+| 8       | Sensor BH1750 | Pasang modul 0x23, bandingkan `lux_bh` dengan `lux_est` | `lux_bh` terisi dan dipakai; tanpa modul kembali ke LDR |    |
+| 9       | Margin penghematan | Baca `savings_pct` dan `savings_margin_pp` | Ditampilkan sebagai nilai ± margin dengan label baseline terhitung |    |
+
+### **E. MQTT dan Home Assistant (opsional)**
+
+| **No.** | **Uji** | **Cara** | **Hasil diharapkan** | **Hasil aktual** |
+| ------- | ------- | -------- | -------------------- | ---------------- |
+| 1       | Opt-in | Build tanpa `SMARTLUX_ENABLE_MQTT`, lalu dengan define tersebut | Build dasar tidak berubah; varian MQTT berhasil |                  |
+| 2       | Koneksi broker | Isi IP broker lokal di `secrets.h`, amati Serial | ID 6 hex muncul; status `connected` |                  |
+| 3       | Telemetri | Langgani `smartlux/<id>/state` | JSON 28 kunci tiap 5 detik |                  |
+| 4       | Discovery | Buka Home Assistant → Perangkat | Sembilan entitas SMARTLUX muncul |                  |
+| 5       | LWT | Putuskan Wi-Fi broker | Status berubah `offline` secara retained |                  |
+| 6       | Backoff | Matikan broker selama 1 menit, lalu nyalakan | Perangkat menyambung kembali tanpa reset |                  |
 
 ## **Lampiran 4. Dokumentasi**
 

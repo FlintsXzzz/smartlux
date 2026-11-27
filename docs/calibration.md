@@ -29,13 +29,25 @@ Rincian metodologi ada di proposal (BAB III); dokumen ini hanya urutan kerja.
 3. Kalibrasi memakai `setCalibration_32V_2A()` (rentang ±3,2 A). Catat simpangan
    pada tabel pengamatan.
 
-## 4. PIR HC-SR501 (GPIO27, OUT)
+## 4. BH1750 opsional (0x23, I²C)
+
+1. Sambungkan BH1750 ke SDA/SCL 3,3 V yang sama dengan OLED/INA219 (alamat 0x23,
+   tidak bentrok). Sensor terdeteksi otomatis saat boot (`# BH1750 siap`).
+2. Bandingkan `lux_bh` di `/api/status` dengan luxmeter atau aplikasi ponsel pada
+   posisi yang sama. Akurasi khas ±20%; catat simpangannya, jangan klaim sebagai
+   alat ukur terkalibrasi.
+3. Sesuaikan `LUX_DARK_ON` (50 lx) dan `LUX_BRIGHT_OFF` (80 lx) bila kondisi
+   ruangan uji berbeda; jaga nilai gelap < terang.
+4. Tanpa BH1750, firmware otomatis memakai ambang ADC LDR seperti biasa; tidak
+   ada perubahan kabel yang wajib.
+
+## 5. PIR HC-SR501 (GPIO27, OUT)
 
 - Ukur tegangan OUT dengan multimeter; OUT harus ≤ 3,6 V sebelum disambungkan
   ke GPIO27.
 - Beri waktu pemanasan 60 detik dan pilih mode H (repeat) sesuai rencana.
 
-## 5. Pencatatan
+## 6. Pencatatan
 
 - Energi diintegrasikan oleh firmware (`E_Wh += V·I·dt/3600`) tiap detik.
   Tekan **Reset energi** di dashboard (`/api/reset`) di awal setiap percobaan.
@@ -45,6 +57,8 @@ Rincian metodologi ada di proposal (BAB III); dokumen ini hanya urutan kerja.
 ## Verifikasi akhir
 
 - [ ] Ambang LDR terisi dan stabil pada kondisi terang/gelap
+- [ ] (Bila dipasang) `lux_bh` cocok dengan luxmeter dalam ±20%
 - [ ] INA219 cocok dengan multimeter (V dan A)
+- [ ] Delay 5–200 dtk dan PWM tersimpan setelah reboot
 - [ ] Tegangan OUT PIR ≤ 3,6 V terukur
 - [ ] Satu sumber 5 V, USB dicabut saat mengukur

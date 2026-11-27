@@ -22,3 +22,6 @@ compile_commands.json
 
 # Local hookify rules (per-user, not shared)
 .claude/*.local.md
+
+# Preprocessed sketch artifacts
+*.ino.cpp

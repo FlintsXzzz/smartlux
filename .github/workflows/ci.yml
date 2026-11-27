@@ -26,7 +26,7 @@ jobs:
           python3 - <<'PY'
           import re, sys
           src = open("firmware/SMARTLUX/SMARTLUX.ino", encoding="utf-8").read()
-          budgets = {"INDEX_HTML": 8192, "CHART_HTML": 2560}
+          budgets = {"INDEX_HTML": 8192, "CHART_HTML": 4096}
           for name, budget in budgets.items():
               m = re.search(re.escape(name) + r'\[\][^=]*=\s*R"rawliteral\((.*?)\)rawliteral"', src, re.S)
               if not m:
@@ -35,6 +35,13 @@ jobs:
               print(f"{name} = {size} bytes (budget {budget})")
               if size > budget:
                   sys.exit(f"{name} exceeds the {budget} byte PROGMEM budget")
+          # Exactly two raw literals: INDEX_HTML and CHART_HTML. The MQTT
+          # discovery/config strings use R"json(...)json" instead, so a third
+          # raw literal here means an accidental dashboard payload or a lost
+          # R"rawliteral -> R"json conversion.
+          literals = src.count('R"rawliteral(')
+          if literals != 2:
+              sys.exit(f"expected exactly 2 R\"rawliteral( payloads, found {literals}")
           bad = [(i, l) for i, l in enumerate(src.splitlines(), 1)
                  if re.match(r'^(async\s+)?function\s', l)]
           if bad:
@@ -63,8 +70,34 @@ jobs:
       - name: Install PlatformIO
         run: python -m pip install --upgrade platformio
 
-      - name: Build firmware
-        run: pio run -d firmware/SMARTLUX
+      - name: Build firmware (four opt-in combinations)
+        run: |
+          set -euo pipefail
+          for env in esp32dev esp32dev-mqtt esp32dev-ota esp32dev-mqtt-ota; do
+            echo "::group::pio run -e ${env}"
+            pio run -d firmware/SMARTLUX -e "${env}" 2>&1 | tee "/tmp/${env}-build.log"
+            echo "::endgroup::"
+            python3 - "${env}" "/tmp/${env}-build.log" <<'PY'
+          import re, sys
+          env, log = sys.argv[1], sys.argv[2]
+          text = open(log, encoding="utf-8", errors="replace").read()
+          m = re.search(r"Flash:\s*\[[^\]]*\]\s*[\d.]+%\s*\(used (\d+) bytes from (\d+) bytes\)", text)
+          if not m:
+              sys.exit(f"{env}: could not parse flash usage from build log")
+          used, total = int(m.group(1)), int(m.group(2))
+          ceiling = 1179648  # 90% of 1310720 bytes (ESP32 DevKit flash)
+          if total != 1310720:
+              ceiling = int(total * 0.90)
+          print(f"{env}: {used} / {total} bytes ({used / total:.1%}), ceiling {ceiling}")
+          if used > ceiling:
+              sys.exit(f"{env}: flash {used} exceeds the 90% ceiling {ceiling}")
+          # Base build: MQTT glue is compiled out. 1036623 is the post-Tier-1
+          # baseline; a jump >100 B means an opt-in feature leaked into base.
+          baseline = 1036623
+          if env == "esp32dev" and used > baseline + 100:
+              sys.exit(f"base firmware grew by {used - baseline} bytes (> 100)")
+          PY
+          done
 
   native-tests:
     name: Unit tests (native)
